@@ -39,12 +39,18 @@ def fetch_building_by_bbl(bbl: str) -> Optional[Dict[str, Any]]:
 
     # Step 1: Get LL97 covered building info (identity, compliance pathway)
     # This is the primary source for building identity per CLAUDE.md
+    # Actual column names: preliminary_bin, address, cp0-cp4 booleans
     ll97_query = """
         SELECT
             bbl,
-            bin_preliminary as bin,
-            address_canonical as address,
-            compliance_pathway
+            preliminary_bin as bin,
+            address,
+            zip_code,
+            cp0_article_320_2024,
+            cp1_article_320_2026,
+            cp2_article_320_2035,
+            cp3_article_321_onetime,
+            cp4_city_portfolio
         FROM ll97_covered_buildings
         WHERE bbl = :bbl
     """
@@ -56,26 +62,40 @@ def fetch_building_by_bbl(bbl: str) -> Optional[Dict[str, Any]]:
     # Start building result dict from LL97 data
     building = ll97_data.iloc[0].to_dict()
 
+    # Derive compliance pathway string from boolean columns
+    pathways = []
+    if building.get('cp0_article_320_2024'):
+        pathways.append('CP0 (2024)')
+    if building.get('cp1_article_320_2026'):
+        pathways.append('CP1 (2026)')
+    if building.get('cp2_article_320_2035'):
+        pathways.append('CP2 (2035)')
+    if building.get('cp3_article_321_onetime'):
+        pathways.append('CP3 (One-Time)')
+    if building.get('cp4_city_portfolio'):
+        pathways.append('CP4 (City Portfolio)')
+    building['compliance_pathway'] = ', '.join(pathways) if pathways else 'None assigned'
+
     # Step 2: Get LL84 energy data from deduplicated table
-    # Includes pre-calculated GHG emissions and penalties
+    # Actual column names from ll84_load_supabase.py
     ll84_query = """
         SELECT
             year_built,
-            property_gfa as gfa,
-            largest_property_use_type as property_type,
-            site_eui_kbtu_ft2 as site_eui,
-            electricity_use_grid_purchase_kwh as electricity_kwh,
-            natural_gas_use_kbtu as natural_gas_kbtu,
-            fuel_oil_2_use_kbtu as fuel_oil_kbtu,
-            district_steam_use_kbtu as steam_kbtu,
-            total_ghg_emissions_metric_tons_co2e as total_ghg,
-            ghg_emissions_2024_2029,
-            emissions_limit_2024_2029,
-            penalty_2024_2029,
-            ghg_emissions_2030_2034,
-            emissions_limit_2030_2034,
-            penalty_2030_2034,
-            energy_star_score
+            total_gross_floor_area as gfa,
+            property_use as property_type,
+            site_energy_unit_intensity as site_eui,
+            electricity_use as electricity_kwh,
+            natural_gas_use as natural_gas_kbtu,
+            fuel_oil_1_2_use as fuel_oil_kbtu,
+            district_steam_use as steam_kbtu,
+            total_carbon_emissions as total_ghg,
+            total_carbon_emissions as ghg_emissions_2024_2029,
+            carbon_limit_2024 as emissions_limit_2024_2029,
+            penalty_2024 as penalty_2024_2029,
+            total_carbon_emissions as ghg_emissions_2030_2034,
+            carbon_limit_2030 as emissions_limit_2030_2034,
+            penalty_2030 as penalty_2030_2034,
+            energy_grade as energy_star_score
         FROM ll84_data
         WHERE bbl = :bbl
     """
