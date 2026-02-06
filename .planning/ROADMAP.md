@@ -29,12 +29,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. User can view all retrieved building fields in organized sections
   3. User can view the 6 generated system narratives for any building
   4. User can view GHG emissions and penalty calculations for both compliance periods
-**Plans**: TBD
+**Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 01-01: TBD during planning
-- [ ] 01-02: TBD during planning
-- [ ] 01-03: TBD during planning
+- [ ] 01-01-PLAN.md — Project setup, dependencies, and BBL validation utilities
+- [ ] 01-02-PLAN.md — Database module and Claude API client for narratives
+- [ ] 01-03-PLAN.md — Main Streamlit application with all UI components
 
 ### Phase 2: Data Retrieval Waterfall
 **Goal**: System can fetch, aggregate, and store all building data from multiple sources
@@ -108,7 +108,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Web UI Foundation | 0/TBD | Not started | - |
+| 1. Web UI Foundation | 0/3 | Planned | - |
 | 2. Data Retrieval Waterfall | 0/TBD | Not started | - |
 | 3. Calculations & Narratives | 0/TBD | Not started | - |
 | 4. Airtable Integration | 0/TBD | Not started | - |
