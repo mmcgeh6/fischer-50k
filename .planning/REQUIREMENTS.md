@@ -7,10 +7,10 @@
 
 ### User Interface
 
-- [ ] **UI-01**: User can enter a BBL number to trigger data retrieval
-- [ ] **UI-02**: User can view all retrieved building data fields (11 minimum + additional fields)
-- [ ] **UI-03**: User can view 6 generated system narratives for the building
-- [ ] **UI-04**: User can view GHG emissions and penalty calculations for both compliance periods
+- [x] **UI-01**: User can enter a BBL number to trigger data retrieval ✓
+- [x] **UI-02**: User can view all retrieved building data fields (11 minimum + additional fields) ✓
+- [x] **UI-03**: User can view 6 generated system narratives for the building ✓
+- [x] **UI-04**: User can view GHG emissions and penalty calculations for both compliance periods ✓
 - [ ] **UI-05**: User can select a building and push its record to Airtable
 
 ### Data Retrieval
@@ -95,10 +95,10 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UI-01 | Phase 1 | Pending |
-| UI-02 | Phase 1 | Pending |
-| UI-03 | Phase 1 | Pending |
-| UI-04 | Phase 1 | Pending |
+| UI-01 | Phase 1 | Complete |
+| UI-02 | Phase 1 | Complete |
+| UI-03 | Phase 1 | Complete |
+| UI-04 | Phase 1 | Complete |
 | UI-05 | Phase 4 | Pending |
 | DATA-01 | Phase 2 | Pending |
 | DATA-02 | Phase 2 | Pending |
