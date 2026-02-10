@@ -8,3 +8,5 @@ psycopg2-binary>=2.9
 python-dotenv>=1.0
 pandas>=1.4.0
 sqlalchemy>=2.0
+requests>=2.31
+sodapy>=2.2.0
