@@ -145,3 +145,72 @@ def get_building_count() -> int:
     conn = get_connection()
     result = conn.query("SELECT COUNT(*) as count FROM ll97_covered_buildings", ttl="1h")
     return int(result.iloc[0]['count'])
+
+
+def fetch_building_from_metrics(bbl: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch building data from Building_Metrics table (cached waterfall results).
+
+    This provides a "check cache first" option for the UI. If data exists in
+    Building_Metrics, it means the waterfall has already been executed for this BBL.
+
+    Args:
+        bbl: 10-digit BBL string
+
+    Returns:
+        Dictionary with building data from Building_Metrics table, or None if not found
+    """
+    conn = get_connection()
+
+    query = """
+        SELECT * FROM building_metrics
+        WHERE bbl = :bbl
+    """
+
+    try:
+        result = conn.query(query, params={"bbl": bbl}, ttl="10m")
+
+        if result.empty:
+            return None
+
+        # Convert to dict
+        building = result.iloc[0].to_dict()
+        return building
+
+    except Exception as e:
+        # Table might not exist yet - graceful degradation
+        return None
+
+
+def check_building_processed(bbl: str) -> Optional[str]:
+    """
+    Check if BBL exists in Building_Metrics table (has been processed).
+
+    Used by UI to show "last processed" status and decide whether to re-fetch.
+
+    Args:
+        bbl: 10-digit BBL string
+
+    Returns:
+        ISO format timestamp string of when building was last updated, or None if not found
+    """
+    conn = get_connection()
+
+    query = """
+        SELECT updated_at FROM building_metrics
+        WHERE bbl = :bbl
+    """
+
+    try:
+        result = conn.query(query, params={"bbl": bbl}, ttl="10m")
+
+        if result.empty:
+            return None
+
+        # Return timestamp as string
+        updated_at = result.iloc[0]['updated_at']
+        return str(updated_at)
+
+    except Exception as e:
+        # Table might not exist yet - graceful degradation
+        return None
