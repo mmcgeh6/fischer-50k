@@ -7,9 +7,11 @@ AI-generated system narratives.
 """
 
 import streamlit as st
-from lib.database import fetch_building_by_bbl, get_building_count
+from lib.database import fetch_building_by_bbl, get_building_count, check_building_processed
+from lib.waterfall import fetch_building_waterfall
 from lib.api_client import generate_all_narratives, NARRATIVE_CATEGORIES
 from lib.validators import validate_bbl, bbl_to_dashed, get_borough_name
+from datetime import datetime, timedelta
 
 
 # Page configuration
@@ -27,6 +29,10 @@ if 'narratives' not in st.session_state:
     st.session_state.narratives = None
 if 'current_bbl' not in st.session_state:
     st.session_state.current_bbl = None
+if 'data_source' not in st.session_state:
+    st.session_state.data_source = None
+if 'last_processed' not in st.session_state:
+    st.session_state.last_processed = None
 
 
 def format_currency(value) -> str:
@@ -98,7 +104,7 @@ def display_energy_data(data: dict):
         with st.expander("View Raw LL87 Data", expanded=False):
             st.json(data.get('ll87_raw'))
     else:
-        st.info("No LL87 audit data available for this building")
+        st.info("No LL87 audit data available for this building (not in ll87_raw table)")
 
 
 def display_penalties(data: dict):
@@ -198,19 +204,62 @@ if submitted:
     elif not validate_bbl(bbl_input):
         st.error(f"Invalid BBL format: '{bbl_input}'. BBL must be 10 digits with borough 1-5.")
     else:
-        # Fetch building data
-        with st.spinner("Retrieving building data from LL97, LL84, LL87..."):
+        # Check if building already processed (cache check)
+        cached_ts = check_building_processed(bbl_input)
+        refetch = False
+
+        if cached_ts:
+            # Parse timestamp to check if recent (within 24 hours)
             try:
-                building_data = fetch_building_by_bbl(bbl_input)
-            except Exception as e:
-                st.error(f"Database error: {str(e)}")
-                building_data = None
+                last_updated = datetime.fromisoformat(cached_ts.replace('+00:00', ''))
+                age = datetime.utcnow() - last_updated
+                is_recent = age < timedelta(hours=24)
+
+                st.info(f"Last processed: {cached_ts}")
+
+                # Offer re-fetch option
+                refetch = st.checkbox(
+                    "Re-fetch live data",
+                    value=not is_recent,  # Default to refetch if older than 24h
+                    help="Check this to fetch fresh data from NYC APIs"
+                )
+            except Exception:
+                # If timestamp parsing fails, just refetch
+                refetch = True
+
+        # Execute waterfall (either first time or user requested refetch)
+        if not cached_ts or refetch:
+            with st.spinner("Running data retrieval waterfall (LL97 -> LL84 API -> LL87)..."):
+                try:
+                    building_data = fetch_building_waterfall(bbl_input, save_to_db=True)
+                except Exception as e:
+                    st.error(f"Waterfall error: {str(e)}")
+                    building_data = None
+        else:
+            # Use cached data from Building_Metrics
+            with st.spinner("Loading cached building data..."):
+                try:
+                    from lib.database import fetch_building_from_metrics
+                    building_data = fetch_building_from_metrics(bbl_input)
+
+                    # If cached data doesn't have ll87_raw, fetch it separately
+                    if building_data and not building_data.get('ll87_raw'):
+                        # Query ll87_raw separately for narratives
+                        ll87_data = fetch_building_by_bbl(bbl_input)
+                        if ll87_data and ll87_data.get('ll87_raw'):
+                            building_data['ll87_raw'] = ll87_data['ll87_raw']
+                except Exception as e:
+                    st.error(f"Cache retrieval error: {str(e)}")
+                    building_data = None
 
         if not building_data:
-            st.warning(f"No data found for BBL {bbl_input}. This building may not be in the LL97 Covered Buildings List.")
+            st.warning(f"No data found for BBL {bbl_input}. This building may not be in the LL97 Covered Buildings List or NYC APIs.")
         else:
             st.session_state.building_data = building_data
             st.session_state.current_bbl = bbl_input
+            st.session_state.data_source = building_data.get('data_source', 'unknown')
+            st.session_state.last_processed = cached_ts if cached_ts else 'Just now'
+
             st.success(f"Retrieved data for: {building_data.get('address', 'Unknown address')}")
 
             # Generate narratives
@@ -225,6 +274,15 @@ if submitted:
 # Display results if data exists in session state
 if st.session_state.building_data:
     data = st.session_state.building_data
+
+    # Show data source indicators
+    if st.session_state.data_source:
+        st.info(f"**Data sources:** {st.session_state.data_source}")
+
+    # Show PLUTO fallback warning if LL84 API was not used
+    if st.session_state.data_source and 'll84_api' not in st.session_state.data_source:
+        if 'pluto' in st.session_state.data_source:
+            st.warning("LL84 energy data not available for this building. Using PLUTO fallback for basic building metrics.")
 
     # Create tabs for different data sections
     tab1, tab2, tab3, tab4 = st.tabs([
