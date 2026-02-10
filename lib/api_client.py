@@ -116,13 +116,13 @@ CRITICAL RULES:
     )
 
     # Build context from building data (per CLAUDE.md context fields)
-    year_built = building_data.get('year_built', 'Not documented')
-    property_type = building_data.get('property_type', 'Not documented')
-    gfa = building_data.get('gfa', 0)
-    electricity = building_data.get('electricity_kwh', 0)
-    natural_gas = building_data.get('natural_gas_kbtu', 0)
-    fuel_oil = building_data.get('fuel_oil_kbtu', 0)
-    steam = building_data.get('steam_kbtu', 0)
+    year_built = building_data.get('year_built') or 'Not documented'
+    property_type = building_data.get('property_type') or 'Not documented'
+    gfa = building_data.get('gfa') or 0
+    electricity = building_data.get('electricity_kwh') or 0
+    natural_gas = building_data.get('natural_gas_kbtu') or 0
+    fuel_oil = building_data.get('fuel_oil_kbtu') or 0
+    steam = building_data.get('steam_kbtu') or 0
 
     user_message = f"""Generate a {category} Narrative for this building.
 
