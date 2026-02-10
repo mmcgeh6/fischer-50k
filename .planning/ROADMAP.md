@@ -37,7 +37,7 @@ Plans:
 - [x] 01-03-PLAN.md — Main Streamlit application with all UI components ✓
 
 ### Phase 2: Data Retrieval Waterfall
-**Goal**: System can fetch, aggregate, and store all building data from multiple sources
+**Goal**: System can fetch, aggregate, and store all building data from multiple sources via live API calls
 **Depends on**: Phase 1
 **Requirements**: DATA-01, DATA-02, DATA-03, DATA-04, DATA-05, DATA-06, DATA-07, STOR-01, STOR-02, STOR-03
 **Success Criteria** (what must be TRUE):
@@ -46,12 +46,12 @@ Plans:
   3. System retrieves all 11 bare minimum fields plus 42 use-type square footage fields
   4. System saves retrieved data to Building_Metrics table with upsert logic
   5. System tracks which buildings have been processed with timestamps
-**Plans**: TBD
+**Plans**: 3 plans in 2 waves
 
 Plans:
-- [ ] 02-01: TBD during planning
-- [ ] 02-02: TBD during planning
-- [ ] 02-03: TBD during planning
+- [ ] 02-01-PLAN.md — Building_Metrics table schema and storage upsert module
+- [ ] 02-02-PLAN.md — NYC Open Data API clients (GeoSearch, LL84, PLUTO) with retry logic
+- [ ] 02-03-PLAN.md — Waterfall orchestrator and Streamlit UI integration
 
 ### Phase 3: Calculations & Narratives
 **Goal**: System generates accurate penalty projections and professional system narratives
@@ -108,8 +108,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Web UI Foundation | 3/3 | ✓ Complete | 2026-02-06 |
-| 2. Data Retrieval Waterfall | 0/TBD | Not started | - |
+| 1. Web UI Foundation | 3/3 | Complete | 2026-02-06 |
+| 2. Data Retrieval Waterfall | 0/3 | Planned | - |
 | 3. Calculations & Narratives | 0/TBD | Not started | - |
 | 4. Airtable Integration | 0/TBD | Not started | - |
 | 5. Batch Processing | 0/TBD | Not started | - |
