@@ -15,13 +15,13 @@
 
 ### Data Retrieval
 
-- [ ] **DATA-01**: System resolves BBL to canonical identity from LL97 Covered Buildings List
-- [ ] **DATA-02**: System falls back to GeoSearch API if BBL not found in LL97 list
-- [ ] **DATA-03**: System fetches live energy data from LL84 API using BIN
-- [ ] **DATA-04**: System retrieves mechanical audit data from LL87 raw table (2019-2024 first, 2012-2018 fallback)
-- [ ] **DATA-05**: System falls back to PLUTO API for building metrics if LL84 data missing
-- [ ] **DATA-06**: System retrieves all 11 bare minimum fields (BBL, addresses, year built, use type, GFA, 5 energy metrics)
-- [ ] **DATA-07**: System retrieves 42 use-type square footage fields for penalty calculations
+- [x] **DATA-01**: System resolves BBL to canonical identity from LL97 Covered Buildings List ✓
+- [x] **DATA-02**: System falls back to GeoSearch API if BBL not found in LL97 list ✓
+- [x] **DATA-03**: System fetches live energy data from LL84 API using BIN ✓
+- [x] **DATA-04**: System retrieves mechanical audit data from LL87 raw table (2019-2024 first, 2012-2018 fallback) ✓
+- [x] **DATA-05**: System falls back to PLUTO API for building metrics if LL84 data missing ✓
+- [x] **DATA-06**: System retrieves all 11 bare minimum fields (BBL, addresses, year built, use type, GFA, 5 energy metrics) ✓
+- [x] **DATA-07**: System retrieves 42 use-type square footage fields for penalty calculations ✓
 
 ### Calculations
 
@@ -44,9 +44,9 @@
 
 ### Storage
 
-- [ ] **STOR-01**: System saves retrieved data and narratives to Building_Metrics table in Supabase
-- [ ] **STOR-02**: System handles upsert logic (update existing, insert new) based on BBL
-- [ ] **STOR-03**: System tracks which buildings have been processed with timestamps
+- [x] **STOR-01**: System saves retrieved data and narratives to Building_Metrics table in Supabase ✓
+- [x] **STOR-02**: System handles upsert logic (update existing, insert new) based on BBL ✓
+- [x] **STOR-03**: System tracks which buildings have been processed with timestamps ✓
 
 ### Airtable Integration
 
@@ -100,13 +100,13 @@
 | UI-03 | Phase 1 | Complete |
 | UI-04 | Phase 1 | Complete |
 | UI-05 | Phase 4 | Pending |
-| DATA-01 | Phase 2 | Pending |
-| DATA-02 | Phase 2 | Pending |
-| DATA-03 | Phase 2 | Pending |
-| DATA-04 | Phase 2 | Pending |
-| DATA-05 | Phase 2 | Pending |
-| DATA-06 | Phase 2 | Pending |
-| DATA-07 | Phase 2 | Pending |
+| DATA-01 | Phase 2 | Complete |
+| DATA-02 | Phase 2 | Complete |
+| DATA-03 | Phase 2 | Complete |
+| DATA-04 | Phase 2 | Complete |
+| DATA-05 | Phase 2 | Complete |
+| DATA-06 | Phase 2 | Complete |
+| DATA-07 | Phase 2 | Complete |
 | CALC-01 | Phase 3 | Pending |
 | CALC-02 | Phase 3 | Pending |
 | CALC-03 | Phase 3 | Pending |
@@ -120,9 +120,9 @@
 | NARR-06 | Phase 3 | Pending |
 | NARR-07 | Phase 3 | Pending |
 | NARR-08 | Phase 3 | Pending |
-| STOR-01 | Phase 2 | Pending |
-| STOR-02 | Phase 2 | Pending |
-| STOR-03 | Phase 2 | Pending |
+| STOR-01 | Phase 2 | Complete |
+| STOR-02 | Phase 2 | Complete |
+| STOR-03 | Phase 2 | Complete |
 | SYNC-01 | Phase 4 | Pending |
 | SYNC-02 | Phase 4 | Pending |
 | SYNC-03 | Phase 4 | Pending |

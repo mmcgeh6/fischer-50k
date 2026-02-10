@@ -13,7 +13,7 @@ This roadmap transforms the Fischer 50K Building Lead Tool from existing data lo
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Web UI Foundation** - Build Streamlit interface for manual BBL lookup and testing ✓
-- [ ] **Phase 2: Data Retrieval Waterfall** - Implement 5-step data pipeline with storage
+- [x] **Phase 2: Data Retrieval Waterfall** - Implement 5-step data pipeline with storage ✓
 - [ ] **Phase 3: Calculations & Narratives** - Add GHG/penalty calculations and AI narrative generation
 - [ ] **Phase 4: Airtable Integration** - Enable on-demand push to Airtable for sales pipeline
 - [ ] **Phase 5: Batch Processing** - Autonomous processing for all 27K buildings with resume capability
@@ -49,9 +49,9 @@ Plans:
 **Plans**: 3 plans in 2 waves
 
 Plans:
-- [ ] 02-01-PLAN.md — Building_Metrics table schema and storage upsert module
-- [ ] 02-02-PLAN.md — NYC Open Data API clients (GeoSearch, LL84, PLUTO) with retry logic
-- [ ] 02-03-PLAN.md — Waterfall orchestrator and Streamlit UI integration
+- [x] 02-01-PLAN.md — Building_Metrics table schema and storage upsert module ✓
+- [x] 02-02-PLAN.md — NYC Open Data API clients (GeoSearch, LL84, PLUTO) with retry logic ✓
+- [x] 02-03-PLAN.md — Waterfall orchestrator and Streamlit UI integration ✓
 
 ### Phase 3: Calculations & Narratives
 **Goal**: System generates accurate penalty projections and professional system narratives
@@ -109,7 +109,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Web UI Foundation | 3/3 | Complete | 2026-02-06 |
-| 2. Data Retrieval Waterfall | 0/3 | Planned | - |
+| 2. Data Retrieval Waterfall | 3/3 | Complete | 2026-02-10 |
 | 3. Calculations & Narratives | 0/TBD | Not started | - |
 | 4. Airtable Integration | 0/TBD | Not started | - |
 | 5. Batch Processing | 0/TBD | Not started | - |
