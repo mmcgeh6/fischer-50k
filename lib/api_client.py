@@ -50,6 +50,10 @@ def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
     """
     Extract relevant equipment data from LL87 raw JSONB for a specific category.
 
+    Uses keyword-based pattern matching against actual LL87 field names, which
+    use formats like "Wall Construction 1", "Heating Plant Type 1",
+    "Cooling Plant Type: Cooling Plant 1", "Fan Control: HVAC Sys 1", etc.
+
     Args:
         ll87_raw: LL87 audit data as dict
         category: Narrative category to extract for
@@ -60,23 +64,46 @@ def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
     if not ll87_raw:
         return "No LL87 audit data available for this building."
 
-    # Map categories to LL87 field paths
-    # These field names may vary based on actual LL87 schema
-    category_fields = {
-        "Building Envelope": ["building_envelope", "envelope", "wall_construction", "roof_construction", "window_type"],
-        "Heating System": ["heating_equipment", "boilers", "heat_exchangers", "heating_plants"],
-        "Cooling System": ["cooling_equipment", "chillers", "cooling_towers", "chilled_water_plants"],
-        "Air Distribution System": ["air_handling_units", "rooftop_units", "packaged_units", "ahu"],
-        "Ventilation System": ["ventilation", "makeup_air_units", "doas", "energy_recovery"],
-        "Domestic Hot Water System": ["domestic_hot_water", "dhw", "water_heaters"]
+    # Map categories to keyword patterns that match actual LL87 field names
+    # LL87 uses descriptive names like "Wall Construction 1", "Heating Plant Type 1"
+    category_keywords = {
+        "Building Envelope": [
+            "wall construction", "wall insulation", "roof ", "window ",
+            "glass type", "skylight", "foundation", "enclosure tightness",
+            "framing material", "demising wall", "exposed above grade",
+        ],
+        "Heating System": [
+            "heating plant", "heating system", "space heating",
+            "boiler", "heat exchanger",
+        ],
+        "Cooling System": [
+            "cooling plant", "cooling system", "chiller", "condenser",
+            "cooling tower", "chilled water", "space cooling",
+        ],
+        "Air Distribution System": [
+            "hvac sys", "fan control", "air distribution", "air supply",
+            "delivery equipment", "central distribution", "thermal zoning",
+            "principle hvac type",
+        ],
+        "Ventilation System": [
+            "ventilation", "outdoor air", "air exhaust", "economizer",
+        ],
+        "Domestic Hot Water System": [
+            "shw sys", "shw system", "hot water", "service water heating",
+        ],
     }
 
-    fields_to_check = category_fields.get(category, [])
+    keywords = category_keywords.get(category, [])
     found_data = []
 
-    for field in fields_to_check:
-        if field in ll87_raw and ll87_raw[field]:
-            found_data.append(f"{field}: {ll87_raw[field]}")
+    for field_name, value in ll87_raw.items():
+        if value is None or value == "" or value == 0:
+            continue
+        field_lower = field_name.lower()
+        for keyword in keywords:
+            if keyword in field_lower:
+                found_data.append(f"- {field_name}: {value}")
+                break
 
     if found_data:
         return "\n".join(found_data)
