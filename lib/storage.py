@@ -228,12 +228,28 @@ def create_building_metrics_table():
                 steam_kbtu NUMERIC,
                 site_eui NUMERIC,
 
-                -- Use-type square footage fields (60 columns)
+                -- Use-type square footage fields (67 columns)
                 {use_type_columns_sql},
 
                 -- LL87 reference fields (Step 3)
                 ll87_audit_id INTEGER,
                 ll87_period VARCHAR(20),
+
+                -- LL97 penalty calculations (Phase 3 - Step 4)
+                ghg_emissions_2024_2029 NUMERIC,
+                emissions_limit_2024_2029 NUMERIC,
+                penalty_2024_2029 NUMERIC,
+                ghg_emissions_2030_2034 NUMERIC,
+                emissions_limit_2030_2034 NUMERIC,
+                penalty_2030_2034 NUMERIC,
+
+                -- AI-generated narratives (Phase 3 - Step 5)
+                envelope_narrative TEXT,
+                heating_narrative TEXT,
+                cooling_narrative TEXT,
+                air_distribution_narrative TEXT,
+                ventilation_narrative TEXT,
+                dhw_narrative TEXT,
 
                 -- Data source tracking
                 data_source VARCHAR(100),
@@ -360,10 +376,70 @@ def get_building_metrics(bbl: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def migrate_add_calculation_columns():
+    """
+    Add Phase 3 calculation and narrative columns to building_metrics table.
+
+    Adds 12 new columns:
+    - 6 penalty calculation columns (NUMERIC): ghg_emissions_2024_2029,
+      emissions_limit_2024_2029, penalty_2024_2029, ghg_emissions_2030_2034,
+      emissions_limit_2030_2034, penalty_2030_2034
+    - 6 narrative columns (TEXT): envelope_narrative, heating_narrative,
+      cooling_narrative, air_distribution_narrative, ventilation_narrative,
+      dhw_narrative
+
+    This function is idempotent - safe to run multiple times.
+    """
+    conn = get_connection()
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    try:
+        # Define columns to add
+        penalty_columns = [
+            "ghg_emissions_2024_2029",
+            "emissions_limit_2024_2029",
+            "penalty_2024_2029",
+            "ghg_emissions_2030_2034",
+            "emissions_limit_2030_2034",
+            "penalty_2030_2034"
+        ]
+
+        narrative_columns = [
+            "envelope_narrative",
+            "heating_narrative",
+            "cooling_narrative",
+            "air_distribution_narrative",
+            "ventilation_narrative",
+            "dhw_narrative"
+        ]
+
+        # Add penalty calculation columns (NUMERIC)
+        for col in penalty_columns:
+            cursor.execute(f"""
+                ALTER TABLE building_metrics
+                ADD COLUMN IF NOT EXISTS {col} NUMERIC;
+            """)
+
+        # Add narrative columns (TEXT)
+        for col in narrative_columns:
+            cursor.execute(f"""
+                ALTER TABLE building_metrics
+                ADD COLUMN IF NOT EXISTS {col} TEXT;
+            """)
+
+        print("Migration complete: Added 12 calculation and narrative columns")
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # Export list for external reference
 __all__ = [
     'create_building_metrics_table',
     'upsert_building_metrics',
     'get_building_metrics',
+    'migrate_add_calculation_columns',
     'USE_TYPE_SQFT_COLUMNS'
 ]
