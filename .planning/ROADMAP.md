@@ -63,12 +63,11 @@ Plans:
   3. System calculates LL97 penalty projections ($268 per tCO2e excess) for both periods
   4. System generates all 6 system narratives (Envelope, Heating, Cooling, Air Distribution, Ventilation, DHW) using Anthropic Claude
   5. System uses data-only approach with explicit "not documented" fallbacks (no inferences)
-**Plans**: TBD
+**Plans**: 2 plans in 2 waves
 
 Plans:
-- [ ] 03-01: TBD during planning
-- [ ] 03-02: TBD during planning
-- [ ] 03-03: TBD during planning
+- [ ] 03-01-PLAN.md — LL97 penalty calculation engine (Decimal precision, 57 emissions factors) and DB schema migration
+- [ ] 03-02-PLAN.md — Wire Steps 4-5 into waterfall, persist to DB, update UI with penalty/narrative display
 
 ### Phase 4: Airtable Integration
 **Goal**: Users can push selected building records to Airtable for sales pipeline management
@@ -110,6 +109,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Web UI Foundation | 3/3 | Complete | 2026-02-06 |
 | 2. Data Retrieval Waterfall | 3/3 | Complete | 2026-02-10 |
-| 3. Calculations & Narratives | 0/TBD | Not started | - |
+| 3. Calculations & Narratives | 0/2 | In progress | - |
 | 4. Airtable Integration | 0/TBD | Not started | - |
 | 5. Batch Processing | 0/TBD | Not started | - |
