@@ -17,6 +17,7 @@ import os
 import streamlit as st
 from anthropic import Anthropic
 from typing import Dict, Any, Optional
+import backoff
 
 
 # Six narrative categories per CLAUDE.md
@@ -110,6 +111,7 @@ def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
     return f"No {category.lower()} data documented in LL87 audit."
 
 
+@backoff.on_exception(backoff.expo, Exception, max_tries=3, jitter=backoff.full_jitter)
 def generate_narrative(
     client: Anthropic,
     category: str,

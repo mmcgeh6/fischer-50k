@@ -11,6 +11,7 @@ from lib.database import fetch_building_by_bbl, get_building_count, check_buildi
 from lib.waterfall import fetch_building_waterfall
 from lib.api_client import generate_all_narratives, NARRATIVE_CATEGORIES
 from lib.validators import validate_bbl, bbl_to_dashed, get_borough_name
+from lib.storage import migrate_add_calculation_columns
 from datetime import datetime, timedelta
 
 
@@ -21,6 +22,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Run schema migration to ensure penalty and narrative columns exist
+try:
+    migrate_add_calculation_columns()
+except Exception as e:
+    # Log error but don't block app startup
+    import logging
+    logging.warning(f"Schema migration skipped or failed: {e}")
 
 # Initialize session state
 if 'building_data' not in st.session_state:
@@ -229,9 +238,31 @@ if submitted:
 
         # Execute waterfall (either first time or user requested refetch)
         if not cached_ts or refetch:
-            with st.spinner("Running data retrieval waterfall (LL97 -> LL84 API -> LL87)..."):
+            with st.spinner("Running data retrieval waterfall (LL97 -> LL84 API -> LL87 -> Penalties -> Narratives)..."):
                 try:
                     building_data = fetch_building_waterfall(bbl_input, save_to_db=True)
+
+                    # Extract narratives from waterfall result
+                    narrative_map = {
+                        'Building Envelope': 'envelope_narrative',
+                        'Heating System': 'heating_narrative',
+                        'Cooling System': 'cooling_narrative',
+                        'Air Distribution System': 'air_distribution_narrative',
+                        'Ventilation System': 'ventilation_narrative',
+                        'Domestic Hot Water System': 'dhw_narrative',
+                    }
+
+                    # Build narratives dict from either the original keys or DB keys
+                    narratives = {}
+                    for category, col in narrative_map.items():
+                        # Try original key first (waterfall stores under both)
+                        if category in building_data:
+                            narratives[category] = building_data[category]
+                        elif col in building_data:
+                            narratives[category] = building_data[col]
+
+                    st.session_state.narratives = narratives if narratives else None
+
                 except Exception as e:
                     st.error(f"Waterfall error: {str(e)}")
                     building_data = None
@@ -244,10 +275,41 @@ if submitted:
 
                     # If cached data doesn't have ll87_raw, fetch it separately
                     if building_data and not building_data.get('ll87_raw'):
-                        # Query ll87_raw separately for narratives
+                        # Query ll87_raw separately for display in Energy Data tab
                         ll87_data = fetch_building_by_bbl(bbl_input)
                         if ll87_data and ll87_data.get('ll87_raw'):
                             building_data['ll87_raw'] = ll87_data['ll87_raw']
+
+                    # Extract narratives from cached data
+                    narrative_map = {
+                        'Building Envelope': 'envelope_narrative',
+                        'Heating System': 'heating_narrative',
+                        'Cooling System': 'cooling_narrative',
+                        'Air Distribution System': 'air_distribution_narrative',
+                        'Ventilation System': 'ventilation_narrative',
+                        'Domestic Hot Water System': 'dhw_narrative',
+                    }
+
+                    narratives = {}
+                    for category, col in narrative_map.items():
+                        val = building_data.get(col)
+                        if val:
+                            narratives[category] = val
+
+                    # Only regenerate narratives if none found in DB and API key available
+                    if not narratives:
+                        import os
+                        api_key = os.environ.get("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY", None)
+                        if api_key:
+                            with st.spinner("Generating system narratives with Claude (this may take 30-60 seconds)..."):
+                                try:
+                                    narratives = generate_all_narratives(building_data)
+                                except Exception as e:
+                                    st.error(f"Narrative generation error: {str(e)}")
+                                    narratives = None
+
+                    st.session_state.narratives = narratives if narratives else None
+
                 except Exception as e:
                     st.error(f"Cache retrieval error: {str(e)}")
                     building_data = None
@@ -261,15 +323,6 @@ if submitted:
             st.session_state.last_processed = cached_ts if cached_ts else 'Just now'
 
             st.success(f"Retrieved data for: {building_data.get('address', 'Unknown address')}")
-
-            # Generate narratives
-            with st.spinner("Generating system narratives with Claude (this may take 30-60 seconds)..."):
-                try:
-                    narratives = generate_all_narratives(building_data)
-                    st.session_state.narratives = narratives
-                except Exception as e:
-                    st.error(f"Narrative generation error: {str(e)}")
-                    st.session_state.narratives = None
 
 # Display results if data exists in session state
 if st.session_state.building_data:

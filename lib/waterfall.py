@@ -1,10 +1,12 @@
 """
-Waterfall orchestrator for 3-step data retrieval process.
+Waterfall orchestrator for 5-step data retrieval process.
 
 Executes the data retrieval waterfall:
 1. Identity & Compliance (LL97 -> PLUTO -> GeoSearch fallback chain)
 2. Live Usage Fetch (LL84 API -> PLUTO fallback)
 3. Mechanical Retrieval (LL87 raw table query)
+4. LL97 Penalty Calculations
+5. Narrative Generation
 
 Saves results to Building_Metrics table and returns complete building data.
 """
@@ -12,9 +14,12 @@ Saves results to Building_Metrics table and returns complete building data.
 import logging
 from typing import Dict, Any, Optional
 import json
+import os
 
 from lib.storage import get_connection as storage_get_connection, upsert_building_metrics
 from lib.nyc_apis import call_ll84_api, call_pluto_api, call_geosearch_api
+from lib.calculations import calculate_ll97_penalty, extract_use_type_sqft
+from lib.api_client import generate_all_narratives
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -147,11 +152,13 @@ def _query_ll87(bbl: str) -> Optional[Dict[str, Any]]:
 
 def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any]:
     """
-    Execute the 3-step data retrieval waterfall for a given BBL.
+    Execute the 5-step data retrieval waterfall for a given BBL.
 
     Step 1: Identity & Compliance (LL97 -> PLUTO -> GeoSearch fallback)
     Step 2: Live Usage Fetch (LL84 API -> PLUTO fallback)
     Step 3: Mechanical Retrieval (LL87 raw table)
+    Step 4: LL97 Penalty Calculations
+    Step 5: Narrative Generation
 
     Args:
         bbl: 10-digit BBL string (no dashes)
@@ -280,6 +287,117 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
         data_sources.append('ll87')
 
     # ========================================================================
+    # STEP 4: LL97 Penalty Calculations
+    # ========================================================================
+
+    try:
+        logger.info(f"Step 4: Calculating LL97 penalties for BBL {bbl}")
+
+        # Extract energy values from result dict (using 'or 0' pattern for None values)
+        electricity_kwh = result.get('electricity_kwh') or 0
+        natural_gas_kbtu = result.get('natural_gas_kbtu') or 0
+        fuel_oil_kbtu = result.get('fuel_oil_kbtu') or 0
+        steam_kbtu = result.get('steam_kbtu') or 0
+
+        # Extract use-type sqft from result dict
+        use_type_sqft = extract_use_type_sqft(result)
+
+        # Calculate penalties
+        penalty_result = calculate_ll97_penalty(
+            electricity_kwh,
+            natural_gas_kbtu,
+            fuel_oil_kbtu,
+            steam_kbtu,
+            use_type_sqft
+        )
+
+        # Check if penalty calculation returned data (not all None values)
+        if penalty_result and any(v is not None for v in penalty_result.values()):
+            logger.info(f"Step 4: Penalty calculation successful for BBL {bbl}")
+
+            # Convert Decimal to float for storage (psycopg2 handles float->NUMERIC fine)
+            for key, value in penalty_result.items():
+                if value is not None:
+                    result[key] = float(value)
+                else:
+                    result[key] = None
+
+            data_sources.append('calculated')
+
+            # Save penalty data to database
+            if save_to_db:
+                penalty_db_data = {'bbl': bbl}
+                penalty_db_data.update({k: result[k] for k in penalty_result.keys()})
+                try:
+                    upsert_building_metrics(penalty_db_data)
+                    logger.info(f"Step 4: Saved penalty data to Building_Metrics for BBL {bbl}")
+                except Exception as e:
+                    logger.error(f"Step 4: Failed to save penalty data: {e}")
+        else:
+            logger.warning(f"Step 4: No penalty data calculated for BBL {bbl} (missing required data)")
+
+    except Exception as e:
+        logger.error(f"Step 4: Penalty calculation error for BBL {bbl}: {e}")
+
+    # ========================================================================
+    # STEP 5: Narrative Generation
+    # ========================================================================
+
+    try:
+        # Check if ANTHROPIC_API_KEY is available
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            try:
+                import streamlit as st
+                api_key = st.secrets.get("ANTHROPIC_API_KEY")
+            except Exception:
+                pass
+
+        if api_key:
+            logger.info(f"Step 5: Generating system narratives for BBL {bbl}")
+
+            # Generate all 6 narratives
+            narratives = generate_all_narratives(result)
+
+            # Map narrative dict keys to DB column names
+            narrative_map = {
+                "Building Envelope": "envelope_narrative",
+                "Heating System": "heating_narrative",
+                "Cooling System": "cooling_narrative",
+                "Air Distribution System": "air_distribution_narrative",
+                "Ventilation System": "ventilation_narrative",
+                "Domestic Hot Water System": "dhw_narrative"
+            }
+
+            # Store narratives in result dict under both original and DB keys
+            for category, db_column in narrative_map.items():
+                if category in narratives:
+                    result[db_column] = narratives[category]
+                    # Also keep under original category key for backwards compatibility
+                    result[category] = narratives[category]
+
+            data_sources.append('narratives')
+
+            # Save narrative data to database
+            if save_to_db:
+                narrative_db_data = {'bbl': bbl}
+                # Only include the DB column names
+                for db_column in narrative_map.values():
+                    if db_column in result:
+                        narrative_db_data[db_column] = result[db_column]
+
+                try:
+                    upsert_building_metrics(narrative_db_data)
+                    logger.info(f"Step 5: Saved narratives to Building_Metrics for BBL {bbl}")
+                except Exception as e:
+                    logger.error(f"Step 5: Failed to save narratives: {e}")
+        else:
+            logger.warning("Step 5: ANTHROPIC_API_KEY not available, skipping narrative generation")
+
+    except Exception as e:
+        logger.error(f"Step 5: Narrative generation error for BBL {bbl}: {e}")
+
+    # ========================================================================
     # Finalize and Save
     # ========================================================================
 
@@ -288,10 +406,14 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
 
     logger.info(f"Waterfall complete for BBL {bbl}, sources: {result['data_source']}")
 
-    # Save to Building_Metrics table if requested
+    # Save basic building data to Building_Metrics table if requested
+    # (Penalties and narratives already saved in Steps 4-5)
     if save_to_db:
         # Prepare data for Building_Metrics (exclude ll87_raw JSONB - stays in ll87_raw table)
-        db_data = {k: v for k, v in result.items() if k != 'll87_raw'}
+        # Also exclude narratives (already saved) to avoid duplication
+        exclude_keys = {'ll87_raw', 'Building Envelope', 'Heating System', 'Cooling System',
+                       'Air Distribution System', 'Ventilation System', 'Domestic Hot Water System'}
+        db_data = {k: v for k, v in result.items() if k not in exclude_keys}
 
         try:
             upsert_building_metrics(db_data)
