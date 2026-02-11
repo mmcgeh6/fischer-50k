@@ -15,6 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Web UI Foundation** - Build Streamlit interface for manual BBL lookup and testing ✓
 - [x] **Phase 2: Data Retrieval Waterfall** - Implement 5-step data pipeline with storage ✓
 - [x] **Phase 3: Calculations & Narratives** - Add GHG/penalty calculations and AI narrative generation ✓
+- [x] **Phase 3.1: Input Flexibility & Data Source Improvements** - Accept dashed BBLs and addresses, BBL-first LL84 queries ✓ (INSERTED)
 - [ ] **Phase 4: Airtable Integration** - Enable on-demand push to Airtable for sales pipeline
 - [ ] **Phase 5: Batch Processing** - Autonomous processing for all 27K buildings with resume capability
 
@@ -69,6 +70,20 @@ Plans:
 - [x] 03-01-PLAN.md — LL97 penalty calculation engine (Decimal precision, 55 emissions factors) and DB schema migration ✓
 - [x] 03-02-PLAN.md — Wire Steps 4-5 into waterfall, persist to DB, update UI with penalty/narrative display ✓
 
+### Phase 3.1: Input Flexibility & Data Source Improvements (INSERTED)
+**Goal**: Widen input avenue and flip LL84 to BBL-first query for reliability
+**Depends on**: Phase 3
+**Requirements**: Derived from client feedback on multi-BIN confusion and input limitations
+**Success Criteria** (what must be TRUE):
+  1. System accepts 10-digit BBLs, dashed BBLs (1-01119-0036), and NYC street addresses
+  2. LL84 queries use BBL as primary method with BIN as guarded fallback only
+  3. BIN fallback cross-validates BBL to prevent multi-BIN campus mismatches
+  4. Narrative prompts include all equipment sections for richer context
+**Plans**: 1 plan (ad-hoc implementation)
+
+Plans:
+- [x] elegant-exploring-kazoo.md — Input detection, BBL-first LL84, resolve_and_fetch, UI updates ✓
+
 ### Phase 4: Airtable Integration
 **Goal**: Users can push selected building records to Airtable for sales pipeline management
 **Depends on**: Phase 3
@@ -110,5 +125,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Web UI Foundation | 3/3 | Complete | 2026-02-06 |
 | 2. Data Retrieval Waterfall | 3/3 | Complete | 2026-02-10 |
 | 3. Calculations & Narratives | 2/2 | Complete | 2026-02-11 |
+| 3.1. Input Flexibility (INSERTED) | 1/1 | Complete | 2026-02-11 |
 | 4. Airtable Integration | 0/TBD | Not started | - |
 | 5. Batch Processing | 0/TBD | Not started | - |

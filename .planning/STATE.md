@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-06)
 
 **Core value:** Accurate, pre-calculated building intel with professional system narratives — ready to share with prospective clients without manual research.
-**Current focus:** Phase 3 complete — ready for Phase 4 (Airtable Integration)
+**Current focus:** Phase 3.1 complete — ready for Phase 4 (Airtable Integration)
 
 ## Current Position
 
-Phase: 3 of 5 complete (Calculations & Narratives)
-Plan: 2 of 2 complete
+Phase: 3.1 of 5 complete (Input Flexibility & Data Source Improvements)
+Plan: 1 of 1 complete
 Status: Complete
-Last activity: 2026-02-11 — Phase 3 verified and closed
+Last activity: 2026-02-11 — Phase 3.1 committed (ea93ade)
 
-Progress: [██████░░░░] 60%
+Progress: [███████░░░] 65%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
-- Average duration: 4.9 min
-- Total execution time: 0.65 hours
+- Total plans completed: 9
+- Average duration: 4.6 min
+- Total execution time: 0.69 hours
 
 **By Phase:**
 
@@ -30,6 +30,7 @@ Progress: [██████░░░░] 60%
 | 01-web-ui-foundation | 3 | 22 min | 7.3 min |
 | 02-data-retrieval-waterfall | 3 | 12 min | 4.0 min |
 | 03-calculations-narratives | 2 | 5 min | 2.5 min |
+| 03.1-input-flexibility | 1 | 2.5 min | 2.5 min |
 
 **Recent Trend:**
 - 01-01: 5 min (project structure setup)
@@ -40,7 +41,8 @@ Progress: [██████░░░░] 60%
 - 02-03: 6 min (Waterfall orchestrator + UI + human verification)
 - 03-01: 3.5 min (Penalty calculation engine)
 - 03-02: 1.5 min (Wire Steps 4-5 + UI + bug fixes during verification)
-- Trend: Accelerating — Phase 3 fastest phase overall
+- 03.1: 2.5 min (Input flexibility, BBL-first LL84, richer narratives)
+- Trend: Accelerating — Phase 3/3.1 fastest work overall
 
 *Updated after each plan completion*
 
@@ -87,13 +89,25 @@ Recent decisions affecting current work:
 - Session-state migration guard: Run schema migration once per Streamlit session, not every rerun (Technical)
 - Backoff retry for narratives: Exponential backoff with jitter on Anthropic API calls (Technical)
 
+**From Phase 3.1 execution:**
+- BBL-first LL84 query: Per client guidance, BBL is primary LL84 query; BIN only as guarded fallback (Architecture)
+- BBL cross-validation guard: BIN fallback cross-checks LL84 record's BBL against expected BBL, rejects mismatches (Architecture)
+- Input auto-detection: detect_input_type() identifies BBL, dashed BBL, or address; normalize_input() converts to 10-digit (Technical)
+- resolve_and_fetch() entry point: Wraps fetch_building_waterfall, handles address resolution via GeoSearch (Architecture)
+- No local LL84 Supabase fallback: User explicitly rejected using ll84_raw table as fallback — it's self-generated, not authoritative (Decision)
+- Deferred web scraping sources: DOF, DOB BIS, ArcGIS deferred — no REST APIs available, would need scraping (Decision)
+- Richer narrative prompts: All 7 equipment sections + existing narratives fed to every narrative prompt (Architecture)
+- Raw API response stashing: _ll97_query_raw, _ll84_api_raw, _pluto_api_raw, _geosearch_api_raw stored in result dict for debug UI (Technical)
+- bin column TEXT: Changed from VARCHAR(50) to TEXT for unlimited multi-BIN storage (Technical)
+
 ### Pending Todos
 
 None yet.
 
 ### Blockers/Concerns
 
-- Multi-BIN campus buildings may not match LL84 API with comma-separated BIN values — data sourcing improvement for future phases
+- Multi-BIN campus buildings: BBL-first LL84 query mitigates this; BIN fallback has cross-validation guard
+- Buildings not in LL84 or LL97: Some BBLs return no data from any source — future phases may add DOF/DOB BIS web scraping
 
 ## Phase 1 Summary
 
@@ -128,10 +142,20 @@ All 13 requirements satisfied (CALC-01 through CALC-05, NARR-01 through NARR-08)
 - UI displays penalties and narratives with debug panel
 - Bug fixes: energy_star_score sanitization, bin column width, migration guard
 
+## Phase 3.1 Summary
+
+**Input Flexibility & Data Source Improvements** — Complete ✓ (INSERTED)
+
+4 key changes across 6 files:
+- Input auto-detection: accept 10-digit BBL, dashed BBL, or NYC address
+- BBL-first LL84 query with guarded BIN fallback (cross-validates BBL)
+- resolve_and_fetch() entry point handles address→BBL resolution via GeoSearch
+- Richer narrative prompts with all equipment sections + debug panels in UI
+
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Phase 3 verified and closed
+Stopped at: Phase 3.1 committed (ea93ade)
 Resume file: None
 
 **Next steps:** Plan and execute Phase 4 (Airtable Integration)
