@@ -210,7 +210,7 @@ def create_building_metrics_table():
             CREATE TABLE IF NOT EXISTS building_metrics (
                 -- Identity fields (from LL97/GeoSearch - Step 1)
                 bbl VARCHAR(10) PRIMARY KEY,
-                bin VARCHAR(10),
+                bin VARCHAR(50),
                 address TEXT,
                 zip_code VARCHAR(5),
                 compliance_pathway VARCHAR(200),
@@ -427,6 +427,12 @@ def migrate_add_calculation_columns():
                 ALTER TABLE building_metrics
                 ADD COLUMN IF NOT EXISTS {col} TEXT;
             """)
+
+        # Widen bin column for multi-BIN campus buildings (was VARCHAR(10), needs VARCHAR(50))
+        cursor.execute("""
+            ALTER TABLE building_metrics
+            ALTER COLUMN bin TYPE VARCHAR(50);
+        """)
 
         print("Migration complete: Added 12 calculation and narrative columns")
 

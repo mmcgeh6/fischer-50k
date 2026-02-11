@@ -25,22 +25,22 @@
 
 ### Calculations
 
-- [ ] **CALC-01**: System calculates GHG emissions for 2024-2029 period using period-specific carbon coefficients
-- [ ] **CALC-02**: System calculates GHG emissions for 2030-2034 period using period-specific carbon coefficients
-- [ ] **CALC-03**: System calculates emissions limits from use-type sqft multiplied by emissions factors
-- [ ] **CALC-04**: System calculates LL97 penalty projection ($268 per tCO2e excess emissions)
-- [ ] **CALC-05**: System handles all 57 use types with their respective emissions factors
+- [x] **CALC-01**: System calculates GHG emissions for 2024-2029 period using period-specific carbon coefficients ✓
+- [x] **CALC-02**: System calculates GHG emissions for 2030-2034 period using period-specific carbon coefficients ✓
+- [x] **CALC-03**: System calculates emissions limits from use-type sqft multiplied by emissions factors ✓
+- [x] **CALC-04**: System calculates LL97 penalty projection ($268 per tCO2e excess emissions) ✓
+- [x] **CALC-05**: System handles all 57 use types with their respective emissions factors ✓
 
 ### AI Narratives
 
-- [ ] **NARR-01**: System generates Building Envelope narrative using Anthropic Claude
-- [ ] **NARR-02**: System generates Heating System narrative using Anthropic Claude
-- [ ] **NARR-03**: System generates Cooling System narrative using Anthropic Claude
-- [ ] **NARR-04**: System generates Air Distribution System narrative using Anthropic Claude
-- [ ] **NARR-05**: System generates Ventilation System narrative using Anthropic Claude
-- [ ] **NARR-06**: System generates Domestic Hot Water System narrative using Anthropic Claude
-- [ ] **NARR-07**: System uses data-only approach (no inferences, explicit "not documented" fallbacks)
-- [ ] **NARR-08**: System passes context fields (year built, use type, GFA, energy metrics) to all narrative prompts
+- [x] **NARR-01**: System generates Building Envelope narrative using Anthropic Claude ✓
+- [x] **NARR-02**: System generates Heating System narrative using Anthropic Claude ✓
+- [x] **NARR-03**: System generates Cooling System narrative using Anthropic Claude ✓
+- [x] **NARR-04**: System generates Air Distribution System narrative using Anthropic Claude ✓
+- [x] **NARR-05**: System generates Ventilation System narrative using Anthropic Claude ✓
+- [x] **NARR-06**: System generates Domestic Hot Water System narrative using Anthropic Claude ✓
+- [x] **NARR-07**: System uses data-only approach (no inferences, explicit "not documented" fallbacks) ✓
+- [x] **NARR-08**: System passes context fields (year built, use type, GFA, energy metrics) to all narrative prompts ✓
 
 ### Storage
 
@@ -107,19 +107,19 @@
 | DATA-05 | Phase 2 | Complete |
 | DATA-06 | Phase 2 | Complete |
 | DATA-07 | Phase 2 | Complete |
-| CALC-01 | Phase 3 | Pending |
-| CALC-02 | Phase 3 | Pending |
-| CALC-03 | Phase 3 | Pending |
-| CALC-04 | Phase 3 | Pending |
-| CALC-05 | Phase 3 | Pending |
-| NARR-01 | Phase 3 | Pending |
-| NARR-02 | Phase 3 | Pending |
-| NARR-03 | Phase 3 | Pending |
-| NARR-04 | Phase 3 | Pending |
-| NARR-05 | Phase 3 | Pending |
-| NARR-06 | Phase 3 | Pending |
-| NARR-07 | Phase 3 | Pending |
-| NARR-08 | Phase 3 | Pending |
+| CALC-01 | Phase 3 | Complete |
+| CALC-02 | Phase 3 | Complete |
+| CALC-03 | Phase 3 | Complete |
+| CALC-04 | Phase 3 | Complete |
+| CALC-05 | Phase 3 | Complete |
+| NARR-01 | Phase 3 | Complete |
+| NARR-02 | Phase 3 | Complete |
+| NARR-03 | Phase 3 | Complete |
+| NARR-04 | Phase 3 | Complete |
+| NARR-05 | Phase 3 | Complete |
+| NARR-06 | Phase 3 | Complete |
+| NARR-07 | Phase 3 | Complete |
+| NARR-08 | Phase 3 | Complete |
 | STOR-01 | Phase 2 | Complete |
 | STOR-02 | Phase 2 | Complete |
 | STOR-03 | Phase 2 | Complete |
@@ -139,4 +139,4 @@
 
 ---
 *Requirements defined: 2026-02-06*
-*Last updated: 2026-02-06 after roadmap creation*
+*Last updated: 2026-02-11 after Phase 3 completion*

@@ -295,9 +295,8 @@ def call_ll84_api(
                 ]:
                     mapped_data[internal_field] = _safe_float(value)
                 elif internal_field == "energy_star_score":
-                    # Energy Star Score can be text like "N/A" or a number
-                    float_val = _safe_float(value)
-                    mapped_data[internal_field] = float_val if float_val is not None else value
+                    # Energy Star Score can be text like "Not Available" — store None for non-numeric
+                    mapped_data[internal_field] = _safe_int(value)
                 else:
                     # String field
                     mapped_data[internal_field] = str(value)

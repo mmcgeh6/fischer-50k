@@ -12,7 +12,7 @@ from lib.waterfall import fetch_building_waterfall
 from lib.api_client import generate_all_narratives, NARRATIVE_CATEGORIES
 from lib.validators import validate_bbl, bbl_to_dashed, get_borough_name
 from lib.storage import migrate_add_calculation_columns
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 # Page configuration
@@ -23,13 +23,15 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Run schema migration to ensure penalty and narrative columns exist
-try:
-    migrate_add_calculation_columns()
-except Exception as e:
-    # Log error but don't block app startup
-    import logging
-    logging.warning(f"Schema migration skipped or failed: {e}")
+# Run schema migration once per session to ensure penalty and narrative columns exist
+if 'migration_done' not in st.session_state:
+    try:
+        migrate_add_calculation_columns()
+        st.session_state.migration_done = True
+    except Exception as e:
+        import logging
+        logging.warning(f"Schema migration skipped or failed: {e}")
+        st.session_state.migration_done = True  # Don't retry on every rerun
 
 # Initialize session state
 if 'building_data' not in st.session_state:
@@ -125,6 +127,11 @@ def display_penalties(data: dict):
     Penalty rate: **$268 per metric ton CO2e** above the limit.
     """)
 
+    # Check if this is stale cached data (no 'calculated' in data sources)
+    data_source = data.get('data_source', '')
+    if data_source and 'calculated' not in data_source and data.get('ghg_emissions_2024_2029') is None:
+        st.warning("This building was cached before penalty calculations were enabled. Check **Re-fetch live data** and submit again to calculate penalties.")
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -166,6 +173,41 @@ def display_penalties(data: dict):
             st.metric("Annual Penalty", format_currency(penalty_2))
         else:
             st.info("No penalty data available for 2030-2034")
+
+    # Debug panel
+    with st.expander("Debug: Calculation Inputs", expanded=False):
+        st.markdown("**Data Sources:** `{}`".format(data.get('data_source', 'N/A')))
+
+        st.markdown("#### Energy Inputs (Step 4)")
+        debug_cols = st.columns(4)
+        debug_cols[0].code(f"electricity_kwh: {data.get('electricity_kwh')}")
+        debug_cols[1].code(f"natural_gas_kbtu: {data.get('natural_gas_kbtu')}")
+        debug_cols[2].code(f"fuel_oil_kbtu: {data.get('fuel_oil_kbtu')}")
+        debug_cols[3].code(f"steam_kbtu: {data.get('steam_kbtu')}")
+
+        has_energy = any([
+            data.get('electricity_kwh') and data.get('electricity_kwh') > 0,
+            data.get('natural_gas_kbtu') and data.get('natural_gas_kbtu') > 0,
+            data.get('fuel_oil_kbtu') and data.get('fuel_oil_kbtu') > 0,
+            data.get('steam_kbtu') and data.get('steam_kbtu') > 0,
+        ])
+        st.markdown(f"**Has energy data:** {'Yes' if has_energy else 'No (all None/zero — penalty will be None)'}")
+
+        st.markdown("#### Use-Type Square Footage")
+        from lib.storage import USE_TYPE_SQFT_COLUMNS
+        use_types_found = {col.replace('_sqft', ''): data.get(col) for col in USE_TYPE_SQFT_COLUMNS if data.get(col)}
+        if use_types_found:
+            for ut, sqft in use_types_found.items():
+                st.text(f"  {ut}: {sqft:,.0f} sqft")
+        else:
+            st.text("  (none found in data)")
+
+        st.markdown("#### Penalty Fields in Data")
+        penalty_fields = ['ghg_emissions_2024_2029', 'emissions_limit_2024_2029', 'penalty_2024_2029',
+                          'ghg_emissions_2030_2034', 'emissions_limit_2030_2034', 'penalty_2030_2034']
+        for field in penalty_fields:
+            val = data.get(field)
+            st.text(f"  {field}: {val}")
 
 
 def display_narratives(narratives: dict):
@@ -221,7 +263,7 @@ if submitted:
             # Parse timestamp to check if recent (within 24 hours)
             try:
                 last_updated = datetime.fromisoformat(cached_ts.replace('+00:00', ''))
-                age = datetime.utcnow() - last_updated
+                age = datetime.now(timezone.utc) - last_updated
                 is_recent = age < timedelta(hours=24)
 
                 st.info(f"Last processed: {cached_ts}")
