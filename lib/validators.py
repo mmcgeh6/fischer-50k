@@ -1,5 +1,5 @@
 """
-BBL validation and format conversion utilities.
+BBL validation, format conversion, and input detection utilities.
 
 BBL (Borough-Block-Lot) is a 10-digit identifier:
 - Digit 1: Borough (1=Manhattan, 2=Bronx, 3=Brooklyn, 4=Queens, 5=Staten Island)
@@ -8,6 +8,9 @@ BBL (Borough-Block-Lot) is a 10-digit identifier:
 
 Example: 1011190036 = Manhattan, Block 01119, Lot 0036
 """
+
+import re
+from typing import Tuple
 
 def validate_bbl(bbl: str) -> bool:
     """
@@ -83,3 +86,54 @@ def get_borough_name(bbl: str) -> str:
     if not bbl:
         return "Unknown"
     return boroughs.get(bbl[0], "Unknown")
+
+
+def detect_input_type(user_input: str) -> str:
+    """
+    Detect whether user input is a BBL, dashed BBL, or address.
+
+    Args:
+        user_input: Raw user input string
+
+    Returns:
+        "bbl", "dashed_bbl", or "address"
+    """
+    stripped = user_input.strip()
+
+    # Check dashed BBL pattern: D-DDDDD-DDDD
+    if re.match(r"^\d-\d{5}-\d{4}$", stripped):
+        return "dashed_bbl"
+
+    # Check 10-digit numeric BBL with valid borough
+    if len(stripped) == 10 and stripped.isdigit() and stripped[0] in "12345":
+        return "bbl"
+
+    return "address"
+
+
+def normalize_input(user_input: str) -> Tuple[str, str]:
+    """
+    Detect input type and normalize to a usable value.
+
+    Args:
+        user_input: Raw user input (BBL, dashed BBL, or address)
+
+    Returns:
+        Tuple of (input_type, normalized_value) where:
+        - input_type is "bbl", "dashed_bbl", or "address"
+        - normalized_value is the 10-digit BBL or stripped address string
+    """
+    stripped = user_input.strip()
+    input_type = detect_input_type(stripped)
+
+    if input_type == "dashed_bbl":
+        normalized = bbl_from_dashed(stripped)
+        # Verify the converted value is actually a valid BBL
+        if not validate_bbl(normalized):
+            return ("address", stripped)
+        return ("dashed_bbl", normalized)
+
+    if input_type == "bbl":
+        return ("bbl", stripped)
+
+    return ("address", stripped)

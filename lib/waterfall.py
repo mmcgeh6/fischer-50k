@@ -17,7 +17,8 @@ import json
 import os
 
 from lib.storage import get_connection as storage_get_connection, upsert_building_metrics
-from lib.nyc_apis import call_ll84_api, call_pluto_api, call_geosearch_api
+from lib.nyc_apis import call_ll84_api, call_ll84_api_by_bbl, call_pluto_api, call_geosearch_api
+from lib.validators import normalize_input, validate_bbl
 from lib.calculations import calculate_ll97_penalty, extract_use_type_sqft
 from lib.api_client import generate_all_narratives
 
@@ -86,6 +87,19 @@ def _query_ll97(bbl: str) -> Optional[Dict[str, Any]]:
 
         result['compliance_pathway'] = ', '.join(pathways) if pathways else 'None assigned'
 
+        # Stash raw query result for debug UI
+        result['_ll97_query_raw'] = {
+            'bbl': row[0],
+            'preliminary_bin': row[1],
+            'address': row[2],
+            'zip_code': row[3],
+            'cp0_article_320_2024': row[4],
+            'cp1_article_320_2026': row[5],
+            'cp2_article_320_2035': row[6],
+            'cp3_article_321_onetime': row[7],
+            'cp4_city_portfolio': row[8],
+        }
+
         return result
 
     finally:
@@ -147,6 +161,72 @@ def _query_ll87(bbl: str) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================================
+# Public Entry Point (accepts BBL, dashed BBL, or address)
+# ============================================================================
+
+def resolve_and_fetch(user_input: str, save_to_db: bool = True) -> Dict[str, Any]:
+    """
+    Resolve user input (BBL, dashed BBL, or address) and execute waterfall.
+
+    This is the primary entry point from the UI. It normalizes the input,
+    resolves addresses via GeoSearch, and delegates to fetch_building_waterfall.
+
+    Args:
+        user_input: BBL (10-digit or dashed) or NYC street address
+        save_to_db: If True, save results to Building_Metrics table
+
+    Returns:
+        Dictionary with all building data plus resolution metadata
+
+    Raises:
+        ValueError: If BBL is invalid or address cannot be resolved
+    """
+    input_type, normalized = normalize_input(user_input)
+
+    if input_type in ("bbl", "dashed_bbl"):
+        if not validate_bbl(normalized):
+            raise ValueError(f"Invalid BBL: {normalized}")
+
+        result = fetch_building_waterfall(normalized, save_to_db=save_to_db)
+        result['input_type'] = input_type
+        result['resolved_bbl'] = normalized
+        return result
+
+    # Address path: resolve via GeoSearch first
+    logger.info(f"Resolving address input: '{normalized}'")
+    geosearch_data = call_geosearch_api(normalized)
+
+    if not geosearch_data or not geosearch_data.get('bbl'):
+        raise ValueError(
+            f"Could not resolve address '{normalized}' to a BBL. "
+            "Try entering the 10-digit BBL directly."
+        )
+
+    resolved_bbl = geosearch_data['bbl']
+    resolved_bin = geosearch_data.get('bin')
+    confidence = geosearch_data.get('confidence', 0)
+
+    logger.info(
+        f"Address resolved to BBL {resolved_bbl}, BIN {resolved_bin} "
+        f"(confidence: {confidence:.2f})"
+    )
+
+    result = fetch_building_waterfall(resolved_bbl, save_to_db=save_to_db)
+
+    # Add resolution metadata
+    result['input_type'] = 'address'
+    result['resolved_bbl'] = resolved_bbl
+    result['resolved_from_address'] = normalized
+    result['geosearch_confidence'] = confidence
+
+    # Use GeoSearch BIN if waterfall didn't get one from LL97
+    if resolved_bin and not result.get('bin'):
+        result['bin'] = resolved_bin
+
+    return result
+
+
+# ============================================================================
 # Main Waterfall Function
 # ============================================================================
 
@@ -202,6 +282,8 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                 'address': pluto_address,
                 'zip_code': pluto_data.get('zip_code')
             })
+            if '_pluto_api_raw' in pluto_data:
+                result['_pluto_api_raw'] = pluto_data['_pluto_api_raw']
             data_sources.append('pluto')
 
             # Call GeoSearch with PLUTO address to resolve BIN
@@ -210,6 +292,8 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
             if geosearch_data and geosearch_data.get('bin'):
                 logger.info(f"Step 1: GeoSearch resolved BIN {geosearch_data['bin']} from PLUTO address")
                 result['bin'] = geosearch_data['bin']
+                if '_geosearch_api_raw' in geosearch_data:
+                    result['_geosearch_api_raw'] = geosearch_data['_geosearch_api_raw']
                 data_sources.append('geosearch')
             else:
                 logger.warning("Step 1: GeoSearch failed to resolve BIN from PLUTO address")
@@ -221,48 +305,46 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                 'gfa': pluto_data.get('gfa'),
                 'zip_code': pluto_data.get('zip_code')
             })
+            if '_pluto_api_raw' in pluto_data:
+                result['_pluto_api_raw'] = pluto_data['_pluto_api_raw']
             data_sources.append('pluto')
         else:
             # PLUTO itself failed
             logger.error(f"Step 1: PLUTO returned no data for BBL {bbl}")
 
     # ========================================================================
-    # STEP 2: Live Usage Fetch
+    # STEP 2: Live Usage Fetch (BBL-first, BIN fallback with guard)
     # ========================================================================
 
-    bin_number = result.get('bin')
+    ll84_data = None
 
-    if bin_number:
-        logger.info(f"Step 2: Fetching LL84 data for BIN {bin_number}")
+    # Primary: Query LL84 by BBL (avoids all multi-BIN ambiguity)
+    logger.info(f"Step 2: Trying LL84 BBL query for BBL {bbl}")
+    ll84_data = call_ll84_api_by_bbl(bbl)
 
-        # Try LL84 API
-        ll84_data = call_ll84_api(bin_number)
-
-        if ll84_data:
-            # Merge all LL84 fields into result (energy metrics + use-type sqft fields)
-            result.update(ll84_data)
-            data_sources.append('ll84_api')
-        else:
-            # LL84 miss - fallback to PLUTO if not already called in Step 1
-            logger.warning("Step 2: LL84 data not found, falling back to PLUTO")
-
-            if 'pluto' not in data_sources:
-                # Haven't called PLUTO yet in Step 1, call it now
-                pluto_data = call_pluto_api(bbl)
-                if pluto_data:
-                    # PLUTO provides year_built, gfa but NOT energy metrics
-                    result.update({
-                        'year_built': pluto_data.get('year_built'),
-                        'gfa': pluto_data.get('gfa'),
-                        'address': pluto_data.get('address'),
-                        'zip_code': pluto_data.get('zip_code')
-                    })
-                    data_sources.append('pluto')
-            # else: PLUTO already called in Step 1, data already merged
+    if ll84_data:
+        logger.info(f"Step 2: LL84 hit via BBL {bbl}")
     else:
-        logger.warning("Step 2: No BIN available, skipping LL84 API fetch")
+        # Secondary fallback: Query LL84 by BIN with BBL cross-validation guard
+        bin_number = result.get('bin')
+        if bin_number:
+            logger.info(f"Step 2: LL84 BBL miss, trying BIN fallback for BIN {bin_number}")
+            ll84_data = call_ll84_api(bin_number, expected_bbl=bbl)
 
-        # Try PLUTO for basic building metrics if not already called
+            if ll84_data:
+                logger.info(f"Step 2: LL84 hit via BIN {bin_number} (verified)")
+            else:
+                logger.warning(f"Step 2: LL84 BIN fallback failed for BIN {bin_number}")
+        else:
+            logger.warning("Step 2: No BIN available for LL84 fallback")
+
+    if ll84_data:
+        result.update(ll84_data)
+        data_sources.append('ll84_api')
+    else:
+        # Final fallback: PLUTO for building metrics only (no energy data)
+        logger.warning("Step 2: LL84 unavailable, using PLUTO only (no energy data)")
+
         if 'pluto' not in data_sources:
             pluto_data = call_pluto_api(bbl)
             if pluto_data:
@@ -272,6 +354,8 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                     'address': pluto_data.get('address'),
                     'zip_code': pluto_data.get('zip_code')
                 })
+                if '_pluto_api_raw' in pluto_data:
+                    result['_pluto_api_raw'] = pluto_data['_pluto_api_raw']
                 data_sources.append('pluto')
 
     # ========================================================================
@@ -410,10 +494,11 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
     # (Penalties and narratives already saved in Steps 4-5)
     if save_to_db:
         # Prepare data for Building_Metrics (exclude ll87_raw JSONB - stays in ll87_raw table)
-        # Also exclude narratives (already saved) to avoid duplication
+        # Also exclude narratives (already saved) and debug _raw keys
         exclude_keys = {'ll87_raw', 'Building Envelope', 'Heating System', 'Cooling System',
                        'Air Distribution System', 'Ventilation System', 'Domestic Hot Water System'}
-        db_data = {k: v for k, v in result.items() if k not in exclude_keys}
+        db_data = {k: v for k, v in result.items()
+                   if k not in exclude_keys and not k.startswith('_')}
 
         try:
             upsert_building_metrics(db_data)

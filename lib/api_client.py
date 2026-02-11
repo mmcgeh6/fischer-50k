@@ -111,11 +111,69 @@ def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
     return f"No {category.lower()} data documented in LL87 audit."
 
 
+def _extract_all_equipment_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
+    """
+    Extract ALL equipment data from LL87 raw JSONB, organized by section.
+
+    Returns a dict with keys for each equipment section. Each value is a
+    formatted string of matching LL87 fields, or a "not documented" message.
+    """
+    sections = {
+        "Building Automation System": [
+            "building automation", "bas ", "controls",
+        ],
+        "Heating Equipment Specs": [
+            "heating plant", "heating system", "space heating",
+            "boiler", "heat exchanger", "hot water pump", "zone equip",
+        ],
+        "Cooling Equipment Specs": [
+            "cooling plant", "cooling system", "chiller", "condenser",
+            "cooling tower", "chilled water", "space cooling",
+        ],
+        "Air Distribution Equipment Specs": [
+            "hvac sys", "fan control", "air distribution", "air supply",
+            "delivery equipment", "central distribution", "thermal zoning",
+            "principle hvac type", "air handling", "rooftop unit", "packaged unit",
+        ],
+        "Ventilation Equipment Specs": [
+            "ventilation", "outdoor air", "air exhaust", "economizer",
+            "make-up air", "makeup air", "dedicated outdoor air", "energy recovery",
+        ],
+        "Building Envelope": [
+            "wall construction", "wall insulation", "roof ", "window ",
+            "glass type", "skylight", "foundation", "enclosure tightness",
+            "framing material", "demising wall", "exposed above grade",
+        ],
+        "Domestic Hot Water": [
+            "shw sys", "shw system", "hot water", "service water heating",
+        ],
+    }
+
+    if not ll87_raw:
+        return {name: "No LL87 audit data available." for name in sections}
+
+    result = {}
+    for section_name, keywords in sections.items():
+        found = []
+        for field_name, value in ll87_raw.items():
+            if value is None or value == "" or value == 0:
+                continue
+            field_lower = field_name.lower()
+            for kw in keywords:
+                if kw in field_lower:
+                    found.append(f"- {field_name}: {value}")
+                    break
+        result[section_name] = "\n".join(found) if found else f"No {section_name.lower()} documented in LL87 audit."
+
+    return result
+
+
 @backoff.on_exception(backoff.expo, Exception, max_tries=3, jitter=backoff.full_jitter)
 def generate_narrative(
     client: Anthropic,
     category: str,
-    building_data: Dict[str, Any]
+    building_data: Dict[str, Any],
+    all_equipment: Optional[Dict[str, str]] = None
 ) -> str:
     """
     Generate a single system narrative using Claude.
@@ -124,6 +182,7 @@ def generate_narrative(
         client: Anthropic client instance
         category: Narrative category (e.g., "Heating System")
         building_data: Building data dict from database
+        all_equipment: Pre-extracted equipment data from _extract_all_equipment_data()
 
     Returns:
         Generated narrative text (1-2 paragraphs)
@@ -138,34 +197,72 @@ CRITICAL RULES:
 4. Use professional engineering terminology
 5. Be specific about equipment when data is available"""
 
-    # Extract equipment data for this category
-    equipment_data = _extract_equipment_data(
-        building_data.get('ll87_raw'),
-        category
-    )
+    # Extract all equipment data if not pre-computed
+    if all_equipment is None:
+        all_equipment = _extract_all_equipment_data(building_data.get('ll87_raw'))
 
-    # Build context from building data (per CLAUDE.md context fields)
+    # Build context from building data
     year_built = building_data.get('year_built') or 'Not documented'
     property_type = building_data.get('property_type') or 'Not documented'
     gfa = building_data.get('gfa') or 0
+    site_eui = building_data.get('site_eui')
+    site_eui_str = f"{site_eui:,.1f} kBtu/sqft" if site_eui else 'Not documented'
     electricity = building_data.get('electricity_kwh') or 0
     natural_gas = building_data.get('natural_gas_kbtu') or 0
     fuel_oil = building_data.get('fuel_oil_kbtu') or 0
     steam = building_data.get('steam_kbtu') or 0
 
+    # Collect any existing narratives from building_data (from DB cache)
+    narrative_col_map = {
+        "Building Envelope": "envelope_narrative",
+        "Heating System": "heating_narrative",
+        "Cooling System": "cooling_narrative",
+        "Air Distribution System": "air_distribution_narrative",
+        "Ventilation System": "ventilation_narrative",
+        "Domestic Hot Water System": "dhw_narrative",
+    }
+    existing_narratives = []
+    for cat_name, col_name in narrative_col_map.items():
+        val = building_data.get(col_name)
+        if val:
+            existing_narratives.append(f"{cat_name}:\n{val}")
+    narratives_section = "\n\n".join(existing_narratives) if existing_narratives else "No previously generated narratives available."
+
     user_message = f"""Generate a {category} Narrative for this building.
 
 BUILDING CONTEXT:
 - Year Built: {year_built}
-- Property Type: {property_type}
-- Gross Floor Area: {gfa:,} sqft
-- Electricity Use: {electricity:,} kWh
-- Natural Gas Use: {natural_gas:,} kBtu
+- Building Use Type: {property_type}
+- Total Gross Floor Area: {gfa:,} sqft
+- Site Energy Use: {site_eui_str}
 - Fuel Oil #2 Use: {fuel_oil:,} kBtu
 - District Steam Use: {steam:,} kBtu
+- Natural Gas Use: {natural_gas:,} kBtu
+- Electricity Use - Grid Purchase: {electricity:,} kWh
 
-LL87 AUDIT DATA FOR {category.upper()}:
-{equipment_data}
+BUILDING AUTOMATION SYSTEM:
+{all_equipment.get('Building Automation System', 'Not documented')}
+
+HEATING EQUIPMENT SPECS (Boilers, Heat Exchangers, Hot Water Pumps, Zone Equip):
+{all_equipment.get('Heating Equipment Specs', 'Not documented')}
+
+COOLING EQUIPMENT SPECS (Chillers, Chilled Water Pumps, Cooling Towers, Condenser Water Pumps, Heat Exchangers):
+{all_equipment.get('Cooling Equipment Specs', 'Not documented')}
+
+AIR DISTRIBUTION EQUIPMENT SPECS (Air Handling Units, Rooftop Units, Packaged Units):
+{all_equipment.get('Air Distribution Equipment Specs', 'Not documented')}
+
+VENTILATION EQUIPMENT SPECS (Make-up Air Units, Dedicated Outdoor Air Systems, Energy Recovery Ventilators):
+{all_equipment.get('Ventilation Equipment Specs', 'Not documented')}
+
+BUILDING ENVELOPE DATA:
+{all_equipment.get('Building Envelope', 'Not documented')}
+
+DOMESTIC HOT WATER DATA:
+{all_equipment.get('Domestic Hot Water', 'Not documented')}
+
+EXISTING NARRATIVES:
+{narratives_section}
 
 Write a factual 1-2 paragraph narrative about the {category.lower()}. If equipment details are not available, state that the specific systems are not documented in the available audit data."""
 
@@ -198,9 +295,12 @@ def generate_all_narratives(building_data: Dict[str, Any]) -> Dict[str, str]:
     client = get_claude_client()
     narratives = {}
 
+    # Extract all equipment data once for reuse across all 6 narratives
+    all_equipment = _extract_all_equipment_data(building_data.get('ll87_raw'))
+
     for category in NARRATIVE_CATEGORIES:
         try:
-            narratives[category] = generate_narrative(client, category, building_data)
+            narratives[category] = generate_narrative(client, category, building_data, all_equipment)
         except Exception as e:
             # Store error message if narrative generation fails
             narratives[category] = f"Error generating narrative: {str(e)}"
@@ -229,4 +329,5 @@ def generate_single_narrative(
         raise ValueError(f"Invalid category. Must be one of: {NARRATIVE_CATEGORIES}")
 
     client = get_claude_client()
-    return generate_narrative(client, category, building_data)
+    all_equipment = _extract_all_equipment_data(building_data.get('ll87_raw'))
+    return generate_narrative(client, category, building_data, all_equipment)

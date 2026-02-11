@@ -8,9 +8,9 @@ AI-generated system narratives.
 
 import streamlit as st
 from lib.database import fetch_building_by_bbl, get_building_count, check_building_processed
-from lib.waterfall import fetch_building_waterfall
+from lib.waterfall import fetch_building_waterfall, resolve_and_fetch
 from lib.api_client import generate_all_narratives, NARRATIVE_CATEGORIES
-from lib.validators import validate_bbl, bbl_to_dashed, get_borough_name
+from lib.validators import validate_bbl, bbl_to_dashed, get_borough_name, normalize_input
 from lib.storage import migrate_add_calculation_columns
 from datetime import datetime, timedelta, timezone
 
@@ -91,6 +91,31 @@ def display_building_info(data: dict):
     char_cols[2].metric("Gross Floor Area", format_number(data.get('gfa'), " sqft"))
     char_cols[3].metric("Energy Star Score", data.get('energy_star_score', 'N/A'))
 
+    # Debug: Raw data from Step 1
+    with st.expander("Debug: Raw Identity Data", expanded=False):
+        st.markdown("**Data Sources:** `{}`".format(data.get('data_source', 'N/A')))
+
+        if data.get('_ll97_query_raw'):
+            st.markdown("#### LL97 Covered Buildings Query Result")
+            st.json(data['_ll97_query_raw'])
+        else:
+            st.info("No LL97 query data (building not in Covered Buildings List)")
+
+        if data.get('_pluto_api_raw'):
+            st.markdown("#### PLUTO API Response")
+            st.json(data['_pluto_api_raw'])
+
+        if data.get('_geosearch_api_raw'):
+            st.markdown("#### GeoSearch API Response")
+            st.json(data['_geosearch_api_raw'])
+
+        # Show resolution metadata for address inputs
+        if data.get('input_type') == 'address':
+            st.markdown("#### Address Resolution")
+            st.text(f"  Input: {data.get('resolved_from_address', 'N/A')}")
+            st.text(f"  Resolved BBL: {data.get('resolved_bbl', 'N/A')}")
+            st.text(f"  Confidence: {data.get('geosearch_confidence', 'N/A')}")
+
 
 def display_energy_data(data: dict):
     """Display LL84 energy benchmarking data."""
@@ -107,12 +132,33 @@ def display_energy_data(data: dict):
     if site_eui:
         st.metric("Site EUI", f"{site_eui:.1f} kBtu/sqft")
 
+    # Debug: Raw LL84 API response
+    with st.expander("Debug: Raw LL84 API Response", expanded=False):
+        if data.get('_ll84_api_raw'):
+            st.markdown("**Full Socrata API record** (pre-mapping):")
+            st.json(data['_ll84_api_raw'])
+
+            st.markdown("#### Field Mapping Applied")
+            from lib.nyc_apis import LL84_FIELD_MAP
+            mapped_view = {}
+            for api_field, internal_field in LL84_FIELD_MAP.items():
+                raw_val = data['_ll84_api_raw'].get(api_field)
+                mapped_val = data.get(internal_field)
+                if raw_val is not None or mapped_val is not None:
+                    mapped_view[f"{api_field} -> {internal_field}"] = {
+                        "raw": raw_val,
+                        "mapped": mapped_val
+                    }
+            st.json(mapped_view)
+        else:
+            st.info("No raw LL84 API response available (LL84 data may be from cache or unavailable)")
+
     # LL87 Audit info
     st.subheader("LL87 Audit Data")
     if data.get('ll87_raw'):
         st.write(f"**Audit Period:** {data.get('ll87_period', 'Unknown')}")
         st.write(f"**Audit ID:** {data.get('ll87_audit_id', 'Unknown')}")
-        with st.expander("View Raw LL87 Data", expanded=False):
+        with st.expander("Debug: Raw LL87 Data", expanded=False):
             st.json(data.get('ll87_raw'))
     else:
         st.info("No LL87 audit data available for this building (not in ll87_raw table)")
@@ -210,27 +256,61 @@ def display_penalties(data: dict):
             st.text(f"  {field}: {val}")
 
 
-def display_narratives(narratives: dict):
+def display_narratives(narratives: dict, data: dict):
     """Display AI-generated system narratives."""
     st.subheader("System Narratives")
     st.markdown("*AI-generated descriptions based on available building data*")
 
     if not narratives:
         st.info("No narratives generated yet")
-        return
+    else:
+        for category in NARRATIVE_CATEGORIES:
+            narrative = narratives.get(category, "Not generated")
+            with st.expander(f"{category} Narrative", expanded=False):
+                if narrative.startswith("Error"):
+                    st.error(narrative)
+                else:
+                    st.write(narrative)
 
-    for category in NARRATIVE_CATEGORIES:
-        narrative = narratives.get(category, "Not generated")
-        with st.expander(f"{category} Narrative", expanded=False):
-            if narrative.startswith("Error"):
-                st.error(narrative)
-            else:
-                st.write(narrative)
+    # Debug: Show all fields sent to narrative prompts
+    with st.expander("Debug: Narrative Generation Inputs", expanded=False):
+        st.markdown("#### Building Context")
+        context_fields = {
+            'Year Built': data.get('year_built'),
+            'Building Use Type': data.get('property_type'),
+            'Total Gross Floor Area (sf)': data.get('gfa'),
+            'Site Energy Use (kBtu/sqft)': data.get('site_eui'),
+            'Fuel Oil #2 Use (kBtu)': data.get('fuel_oil_kbtu'),
+            'District Steam Use (kBtu)': data.get('steam_kbtu'),
+            'Natural Gas Use (kBtu)': data.get('natural_gas_kbtu'),
+            'Electricity Use - Grid Purchase (kWh)': data.get('electricity_kwh'),
+        }
+        st.json(context_fields)
+
+        st.markdown("#### Existing Narratives")
+        narrative_cols = {
+            'Building Envelope Narrative': 'envelope_narrative',
+            'Heating System Narrative': 'heating_narrative',
+            'Cooling System Narrative': 'cooling_narrative',
+            'Air Distribution System Narrative': 'air_distribution_narrative',
+            'Ventilation System Narrative': 'ventilation_narrative',
+            'Domestic Hot Water System Narrative': 'dhw_narrative',
+        }
+        for label, col in narrative_cols.items():
+            val = data.get(col)
+            st.text(f"  {label}: {f'{len(val)} chars' if val else 'None'}")
+
+        st.markdown("#### LL87 Equipment Data Extracted for Prompts")
+        from lib.api_client import _extract_all_equipment_data
+        equipment = _extract_all_equipment_data(data.get('ll87_raw'))
+        for section_name, section_data in equipment.items():
+            st.markdown(f"**{section_name}:**")
+            st.text(section_data)
 
 
 # Main App
 st.title("Fischer 50K Building Lead Tool")
-st.markdown("Enter a BBL to retrieve building energy data, compliance status, and system narratives.")
+st.markdown("Enter a BBL or NYC address to retrieve building energy data, compliance status, and system narratives.")
 
 # BBL Input Form
 with st.form("bbl_form", clear_on_submit=False):
@@ -238,10 +318,10 @@ with st.form("bbl_form", clear_on_submit=False):
 
     with col1:
         bbl_input = st.text_input(
-            "BBL (10-digit numeric)",
-            placeholder="1011190036",
-            max_chars=10,
-            help="Borough-Block-Lot identifier. Example: 1011190036 (Manhattan, Block 01119, Lot 0036)"
+            "BBL or Address",
+            placeholder="1011190036 or 350 5th Ave, New York, NY",
+            max_chars=200,
+            help="Enter a 10-digit BBL (e.g., 1011190036), dashed BBL (e.g., 1-01119-0036), or a NYC street address."
         )
 
     with col2:
@@ -250,17 +330,29 @@ with st.form("bbl_form", clear_on_submit=False):
 
 # Process form submission
 if submitted:
-    if not bbl_input:
-        st.error("Please enter a BBL number")
-    elif not validate_bbl(bbl_input):
-        st.error(f"Invalid BBL format: '{bbl_input}'. BBL must be 10 digits with borough 1-5.")
+    if not bbl_input or not bbl_input.strip():
+        st.error("Please enter a BBL or address.")
     else:
-        # Check if building already processed (cache check)
-        cached_ts = check_building_processed(bbl_input)
+        # Detect and normalize input
+        input_type, normalized = normalize_input(bbl_input)
+        effective_bbl = None
+
+        if input_type == "dashed_bbl":
+            st.info(f"Converted dashed BBL to: {normalized}")
+            effective_bbl = normalized
+        elif input_type == "bbl":
+            effective_bbl = normalized
+        else:
+            st.info(f"Resolving address: '{bbl_input.strip()}'...")
+
+        # Cache check (only for BBL inputs where we already have the BBL)
+        cached_ts = None
         refetch = False
 
+        if effective_bbl:
+            cached_ts = check_building_processed(effective_bbl)
+
         if cached_ts:
-            # Parse timestamp to check if recent (within 24 hours)
             try:
                 last_updated = datetime.fromisoformat(cached_ts.replace('+00:00', ''))
                 age = datetime.now(timezone.utc) - last_updated
@@ -268,21 +360,31 @@ if submitted:
 
                 st.info(f"Last processed: {cached_ts}")
 
-                # Offer re-fetch option
                 refetch = st.checkbox(
                     "Re-fetch live data",
-                    value=not is_recent,  # Default to refetch if older than 24h
+                    value=not is_recent,
                     help="Check this to fetch fresh data from NYC APIs"
                 )
             except Exception:
-                # If timestamp parsing fails, just refetch
                 refetch = True
 
         # Execute waterfall (either first time or user requested refetch)
         if not cached_ts or refetch:
-            with st.spinner("Running data retrieval waterfall (LL97 -> LL84 API -> LL87 -> Penalties -> Narratives)..."):
+            with st.spinner("Running data retrieval waterfall..."):
                 try:
-                    building_data = fetch_building_waterfall(bbl_input, save_to_db=True)
+                    building_data = resolve_and_fetch(bbl_input, save_to_db=True)
+
+                    # Show resolution feedback for address input
+                    if building_data.get('input_type') == 'address':
+                        resolved_bbl = building_data.get('resolved_bbl', 'Unknown')
+                        confidence = building_data.get('geosearch_confidence', 0)
+                        st.success(
+                            f"Address resolved to BBL **{resolved_bbl}** "
+                            f"(confidence: {confidence:.0%})"
+                        )
+
+                    # Update effective_bbl from waterfall result
+                    effective_bbl = building_data.get('resolved_bbl', building_data.get('bbl', ''))
 
                     # Extract narratives from waterfall result
                     narrative_map = {
@@ -305,6 +407,9 @@ if submitted:
 
                     st.session_state.narratives = narratives if narratives else None
 
+                except ValueError as e:
+                    st.error(str(e))
+                    building_data = None
                 except Exception as e:
                     st.error(f"Waterfall error: {str(e)}")
                     building_data = None
@@ -313,12 +418,11 @@ if submitted:
             with st.spinner("Loading cached building data..."):
                 try:
                     from lib.database import fetch_building_from_metrics
-                    building_data = fetch_building_from_metrics(bbl_input)
+                    building_data = fetch_building_from_metrics(effective_bbl)
 
                     # If cached data doesn't have ll87_raw, fetch it separately
                     if building_data and not building_data.get('ll87_raw'):
-                        # Query ll87_raw separately for display in Energy Data tab
-                        ll87_data = fetch_building_by_bbl(bbl_input)
+                        ll87_data = fetch_building_by_bbl(effective_bbl)
                         if ll87_data and ll87_data.get('ll87_raw'):
                             building_data['ll87_raw'] = ll87_data['ll87_raw']
 
@@ -357,10 +461,11 @@ if submitted:
                     building_data = None
 
         if not building_data:
-            st.warning(f"No data found for BBL {bbl_input}. This building may not be in the LL97 Covered Buildings List or NYC APIs.")
+            display_id = effective_bbl or bbl_input.strip()
+            st.warning(f"No data found for '{display_id}'. This building may not be in the LL97 Covered Buildings List or NYC APIs.")
         else:
             st.session_state.building_data = building_data
-            st.session_state.current_bbl = bbl_input
+            st.session_state.current_bbl = effective_bbl or building_data.get('bbl', '')
             st.session_state.data_source = building_data.get('data_source', 'unknown')
             st.session_state.last_processed = cached_ts if cached_ts else 'Just now'
 
@@ -397,7 +502,7 @@ if st.session_state.building_data:
         display_penalties(data)
 
     with tab4:
-        display_narratives(st.session_state.narratives)
+        display_narratives(st.session_state.narratives, data)
 
 # Footer with building count
 st.divider()

@@ -7,6 +7,7 @@ for the three external APIs used in the waterfall pipeline.
 
 import logging
 import os
+import re
 from typing import Any, Dict, Optional
 
 import requests
@@ -229,7 +230,8 @@ def call_geosearch_api(address: str) -> Optional[Dict[str, Any]]:
             "bin": bin_num,
             "confidence": confidence,
             "label": label,
-            "address": address
+            "address": address,
+            "_geosearch_api_raw": feature,
         }
 
     except requests.RequestException as e:
@@ -237,19 +239,51 @@ def call_geosearch_api(address: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def call_ll84_api(
-    bin_number: str,
+def _map_ll84_result(raw_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Map raw LL84 API response fields to internal Building_Metrics column names.
+
+    Args:
+        raw_data: Single row from LL84 Socrata API response
+
+    Returns:
+        Dict with mapped and type-converted field values
+    """
+    mapped_data = {}
+
+    for api_field, internal_field in LL84_FIELD_MAP.items():
+        value = raw_data.get(api_field)
+
+        if value is not None and value != "":
+            if internal_field in ["year_built"]:
+                mapped_data[internal_field] = _safe_int(value)
+            elif internal_field.endswith("_sqft") or internal_field in [
+                "gfa", "electricity_kwh", "natural_gas_kbtu",
+                "fuel_oil_kbtu", "steam_kbtu", "site_eui"
+            ]:
+                mapped_data[internal_field] = _safe_float(value)
+            elif internal_field == "energy_star_score":
+                mapped_data[internal_field] = _safe_int(value)
+            else:
+                mapped_data[internal_field] = str(value)
+        else:
+            mapped_data[internal_field] = None
+
+    return mapped_data
+
+
+def call_ll84_api_by_bbl(
+    bbl: str,
     app_token: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
-    Call LL84 API to fetch live energy benchmarking data by BIN.
+    Call LL84 API to fetch energy benchmarking data by BBL (primary query method).
 
-    Handles semicolon-delimited multiple BINs using LIKE query.
-    Maps all returned fields to internal Building_Metrics column names.
+    BBL is the North Star identifier — this avoids all multi-BIN ambiguity.
 
     Args:
-        bin_number: NYC BIN to query (can be part of semicolon-delimited list)
-        app_token: NYC Open Data app token (optional, uses _get_app_token() if None)
+        bbl: 10-digit BBL (no dashes)
+        app_token: NYC Open Data app token (optional)
 
     Returns:
         Dict with mapped field names or None if no results
@@ -265,49 +299,106 @@ def call_ll84_api(
             timeout=30
         )
 
-        # Use LIKE query to handle semicolon-delimited BINs (research pitfall #2)
         results = client.get(
             "5zyy-y8am",
-            where=f"nyc_building_identification LIKE '%{bin_number}%'",
+            where=f"nyc_borough_block_and_lot='{bbl}'",
             order="last_modified_date_property DESC",
             limit=1
         )
 
         if not results:
-            logger.warning(f"LL84: No data found for BIN {bin_number}")
+            logger.warning(f"LL84: No data found for BBL {bbl}")
             return None
 
-        # Map API fields to internal names
-        raw_data = results[0]
-        mapped_data = {}
-
-        for api_field, internal_field in LL84_FIELD_MAP.items():
-            value = raw_data.get(api_field)
-
-            # Convert to appropriate Python types
-            if value is not None and value != "":
-                # Determine type based on field name patterns
-                if internal_field in ["year_built"]:
-                    mapped_data[internal_field] = _safe_int(value)
-                elif internal_field.endswith("_sqft") or internal_field in [
-                    "gfa", "electricity_kwh", "natural_gas_kbtu",
-                    "fuel_oil_kbtu", "steam_kbtu", "site_eui"
-                ]:
-                    mapped_data[internal_field] = _safe_float(value)
-                elif internal_field == "energy_star_score":
-                    # Energy Star Score can be text like "Not Available" — store None for non-numeric
-                    mapped_data[internal_field] = _safe_int(value)
-                else:
-                    # String field
-                    mapped_data[internal_field] = str(value)
-            else:
-                mapped_data[internal_field] = None
-
-        logger.info(f"LL84: Retrieved data for BIN {bin_number}")
-        return mapped_data
+        logger.info(f"LL84: Retrieved data via BBL {bbl}")
+        mapped = _map_ll84_result(results[0])
+        mapped['_ll84_api_raw'] = results[0]
+        return mapped
 
     except Exception as e:
-        logger.error(f"LL84 API error for BIN {bin_number}: {e}")
+        logger.error(f"LL84 API error for BBL {bbl}: {e}")
+        return None
+
+    finally:
+        if client:
+            client.close()
+
+
+def call_ll84_api(
+    bin_number: str,
+    app_token: Optional[str] = None,
+    expected_bbl: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Call LL84 API to fetch energy benchmarking data by BIN (guarded secondary fallback).
+
+    Splits multi-BIN values and tries each individually. When expected_bbl is provided,
+    cross-validates the LL84 record's BBL against the expected value to prevent
+    pulling data from the wrong building in multi-BIN campus scenarios.
+
+    Args:
+        bin_number: NYC BIN(s) — may be comma or semicolon-delimited
+        app_token: NYC Open Data app token (optional)
+        expected_bbl: If provided, reject results where LL84's BBL doesn't match
+
+    Returns:
+        Dict with mapped field names or None if no results (or guard rejects)
+    """
+    if app_token is None:
+        app_token = _get_app_token()
+
+    # Split multi-BIN values on commas and semicolons
+    bins = [b.strip() for b in re.split(r'[;,]', bin_number) if b.strip()]
+
+    client = None
+    try:
+        client = Socrata(
+            "data.cityofnewyork.us",
+            app_token,
+            timeout=30
+        )
+
+        for single_bin in bins:
+            if not single_bin.isdigit():
+                continue
+
+            try:
+                results = client.get(
+                    "5zyy-y8am",
+                    where=f"nyc_building_identification LIKE '%{single_bin}%'",
+                    order="last_modified_date_property DESC",
+                    limit=1
+                )
+
+                if not results:
+                    continue
+
+                raw_data = results[0]
+
+                # BBL cross-validation guard
+                if expected_bbl:
+                    result_bbl = raw_data.get("nyc_borough_block_and_lot", "")
+                    if result_bbl and result_bbl != expected_bbl:
+                        logger.warning(
+                            f"LL84: BIN {single_bin} returned BBL {result_bbl}, "
+                            f"expected {expected_bbl} — rejected (BBL mismatch)"
+                        )
+                        continue
+
+                logger.info(f"LL84: Retrieved data via BIN {single_bin} (verified)")
+                mapped = _map_ll84_result(raw_data)
+                mapped['_ll84_api_raw'] = raw_data
+                return mapped
+
+            except Exception as e:
+                logger.error(f"LL84 API error for BIN {single_bin}: {e}")
+                continue
+
+        logger.warning(f"LL84: No data found for any BIN in '{bin_number}'")
+        return None
+
+    except Exception as e:
+        logger.error(f"LL84 API error: {e}")
         return None
 
     finally:
@@ -368,6 +459,7 @@ def call_pluto_api(
             "zip_code": raw_data.get("zipcode")
         }
 
+        mapped_data['_pluto_api_raw'] = raw_data
         logger.info(f"PLUTO: Retrieved data for BBL {bbl}")
         return mapped_data
 
