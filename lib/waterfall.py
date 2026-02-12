@@ -341,6 +341,17 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
     if ll84_data:
         result.update(ll84_data)
         data_sources.append('ll84_api')
+
+        # Phase 4: Compute GFA calculated as sum of non-zero use-type sqft
+        from lib.storage import USE_TYPE_SQFT_COLUMNS
+        gfa_calc = sum(
+            result.get(col) or 0
+            for col in USE_TYPE_SQFT_COLUMNS
+            if (result.get(col) or 0) > 0
+        )
+        if gfa_calc > 0:
+            result['gfa_calculated'] = gfa_calc
+
     else:
         # Final fallback: PLUTO for building metrics only (no energy data)
         logger.warning("Step 2: LL84 unavailable, using PLUTO only (no energy data)")
@@ -357,6 +368,12 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                 if '_pluto_api_raw' in pluto_data:
                     result['_pluto_api_raw'] = pluto_data['_pluto_api_raw']
                 data_sources.append('pluto')
+
+    # Phase 4: building_name fallback to PLUTO owner_name
+    if not result.get('building_name') and result.get('_pluto_api_raw'):
+        pluto_owner = result['_pluto_api_raw'].get('ownername')
+        if pluto_owner:
+            result['building_name'] = pluto_owner
 
     # ========================================================================
     # STEP 3: Mechanical Retrieval

@@ -30,6 +30,43 @@ NARRATIVE_CATEGORIES = [
     "Domestic Hot Water System"
 ]
 
+# Per-category instructions from Gabe's AI Prompt Specification
+CATEGORY_INSTRUCTIONS = {
+    "Building Envelope": """Describe, if provided:
+- Wall, roof, and window assemblies
+- Insulation levels or glazing types only if documented
+Do not infer thermal performance or compliance.""",
+
+    "Heating System": """Describe, if provided:
+- Boilers, heat exchangers, district steam connections
+- Fuel types only if explicitly documented
+- Heating distribution type (steam or hot water) only if stated
+- Heating-related fuel consumption (kBtu), reported as-is
+Do not infer equipment type from fuel consumption alone.""",
+
+    "Cooling System": """Describe, if provided:
+- Chillers, cooling towers, and associated equipment
+- Cooling system configuration only if explicitly documented
+- Cooling-related electric consumption if provided
+Do not infer efficiency, sequencing, or controls.""",
+
+    "Air Distribution System": """Describe, if provided:
+- Air handling units, rooftop units, DOAS systems
+- Supply, return, and exhaust systems if documented
+- Terminal units (VAV, fan coils, radiators)
+- Reheat presence only if explicitly stated""",
+
+    "Ventilation System": """Describe, if provided:
+- Air handling units, rooftop units, DOAS systems
+- Supply, return, and exhaust systems if documented
+- Terminal units (VAV, fan coils, radiators)
+- Reheat presence only if explicitly stated""",
+
+    "Domestic Hot Water System": """Describe, if provided:
+- DHW generation equipment
+- Fuel type or electric service only if documented""",
+}
+
 
 def get_claude_client() -> Anthropic:
     """
@@ -63,7 +100,7 @@ def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
         Formatted equipment description or "No equipment data available"
     """
     if not ll87_raw:
-        return "No LL87 audit data available for this building."
+        return "No LL87 audit data was available for this building."
 
     # Map categories to keyword patterns that match actual LL87 field names
     # LL87 uses descriptive names like "Wall Construction 1", "Heating Plant Type 1"
@@ -108,7 +145,7 @@ def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
 
     if found_data:
         return "\n".join(found_data)
-    return f"No {category.lower()} data documented in LL87 audit."
+    return f"Detailed {category.lower()} specifications were not available in the provided data."
 
 
 def _extract_all_equipment_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
@@ -150,7 +187,7 @@ def _extract_all_equipment_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
     }
 
     if not ll87_raw:
-        return {name: "No LL87 audit data available." for name in sections}
+        return {name: "No LL87 audit data was available for this building." for name in sections}
 
     result = {}
     for section_name, keywords in sections.items():
@@ -163,7 +200,7 @@ def _extract_all_equipment_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
                 if kw in field_lower:
                     found.append(f"- {field_name}: {value}")
                     break
-        result[section_name] = "\n".join(found) if found else f"No {section_name.lower()} documented in LL87 audit."
+        result[section_name] = "\n".join(found) if found else f"Detailed {section_name.lower()} specifications were not available in the provided data."
 
     return result
 
@@ -187,15 +224,24 @@ def generate_narrative(
     Returns:
         Generated narrative text (1-2 paragraphs)
     """
-    # System prompt emphasizing data-only approach
-    system_prompt = """You are a mechanical engineering expert writing concise building system narratives for energy audits.
+    # System prompt per Gabe's AI Prompt Specification
+    system_prompt = """You are a mechanical engineering expert writing building systems narratives for NYC buildings. These narratives are used in Energy Master Plans, Scope of Work (SOW) documentation, Local Law 97 (LL97) technical reporting, and Building Discovery reports.
 
-CRITICAL RULES:
-1. Write 1-2 paragraphs ONLY based on the provided data
-2. If specific data is missing, explicitly state "not documented" — do NOT infer or assume
-3. Focus on factual descriptions, not recommendations
-4. Use professional engineering terminology
-5. Be specific about equipment when data is available"""
+ALL narrative content must be directly supported by explicit data inputs. You must describe EXISTING CONDITIONS ONLY.
+
+CRITICAL RULES (Non-Negotiable):
+1. Include ONLY information explicitly provided in the data
+2. Do NOT infer system type, configuration, controls, or operation from general engineering assumptions, typical system configurations, building age, fuel use patterns, or professional intuition
+3. State WHAT exists or is consumed, not HOW systems operate unless explicitly documented
+4. Do NOT recommend measures, estimate savings, or describe future work
+5. Use a professional, third-person engineering tone
+6. Maximum two paragraphs per system section
+7. If data is missing, state: "Detailed system specifications were not available in the provided data."
+
+The resulting narratives must be:
+- Fully traceable to input data
+- Conservative and factual
+- Suitable for engineering, regulatory, and utility review"""
 
     # Extract all equipment data if not pre-computed
     if all_equipment is None:
@@ -227,6 +273,9 @@ CRITICAL RULES:
         if val:
             existing_narratives.append(f"{cat_name}:\n{val}")
     narratives_section = "\n\n".join(existing_narratives) if existing_narratives else "No previously generated narratives available."
+
+    # Get category-specific instructions
+    cat_instructions = CATEGORY_INSTRUCTIONS.get(category, '')
 
     user_message = f"""Generate a {category} Narrative for this building.
 
@@ -264,7 +313,10 @@ DOMESTIC HOT WATER DATA:
 EXISTING NARRATIVES:
 {narratives_section}
 
-Write a factual 1-2 paragraph narrative about the {category.lower()}. If equipment details are not available, state that the specific systems are not documented in the available audit data."""
+CATEGORY-SPECIFIC INSTRUCTIONS:
+{cat_instructions}
+
+Write a 1-2 paragraph narrative about the {category.lower()} based strictly on the data above. If system data is incomplete or unavailable, use: "Detailed system specifications were not available in the provided data.\""""
 
     message = client.messages.create(
         model="claude-sonnet-4-5-20250929",

@@ -1,6 +1,27 @@
+# Secrets & credentials
 .streamlit/secrets.toml
+.env
+
+# Python
 __pycache__/
 *.pyc
-.env
 venv/
 .venv/
+
+# Data files (too large / not source code)
+*.xlsx
+*.csv
+*.zip
+*.json
+
+# Windows artifacts
+nul
+_ul
+=*
+
+# Claude Code local state
+.claude/
+
+# IDE
+.vscode/
+.idea/

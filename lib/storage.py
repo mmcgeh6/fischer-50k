@@ -441,11 +441,49 @@ def migrate_add_calculation_columns():
         conn.close()
 
 
+def migrate_phase4_columns():
+    """
+    Add Phase 4 UI refinement columns to building_metrics table.
+
+    Adds 4 new columns:
+    - ll84_calendar_year (INTEGER): Reporting year from LL84 API
+    - building_name (TEXT): Property name from LL84 or PLUTO
+    - gfa_self_reported (NUMERIC): Self-reported GFA from LL84
+    - gfa_calculated (NUMERIC): Sum of all non-zero use-type sqft
+
+    This function is idempotent - safe to run multiple times.
+    """
+    conn = get_connection()
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    try:
+        phase4_columns = {
+            "ll84_calendar_year": "INTEGER",
+            "building_name": "TEXT",
+            "gfa_self_reported": "NUMERIC",
+            "gfa_calculated": "NUMERIC",
+        }
+
+        for col, col_type in phase4_columns.items():
+            cursor.execute(f"""
+                ALTER TABLE building_metrics
+                ADD COLUMN IF NOT EXISTS {col} {col_type};
+            """)
+
+        print("Migration complete: Added 4 Phase 4 columns")
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # Export list for external reference
 __all__ = [
     'create_building_metrics_table',
     'upsert_building_metrics',
     'get_building_metrics',
     'migrate_add_calculation_columns',
+    'migrate_phase4_columns',
     'USE_TYPE_SQFT_COLUMNS'
 ]

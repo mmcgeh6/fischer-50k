@@ -27,6 +27,8 @@ st.set_page_config(
 if 'migration_done' not in st.session_state:
     try:
         migrate_add_calculation_columns()
+        from lib.storage import migrate_phase4_columns
+        migrate_phase4_columns()
         st.session_state.migration_done = True
     except Exception as e:
         import logging
@@ -44,6 +46,12 @@ if 'data_source' not in st.session_state:
     st.session_state.data_source = None
 if 'last_processed' not in st.session_state:
     st.session_state.last_processed = None
+if 'edited_narratives' not in st.session_state:
+    st.session_state.edited_narratives = {}
+if 'edited_energy_inputs' not in st.session_state:
+    st.session_state.edited_energy_inputs = {}
+if 'recalculated_penalties' not in st.session_state:
+    st.session_state.recalculated_penalties = None
 
 
 def format_currency(value) -> str:
@@ -62,34 +70,58 @@ def format_number(value, suffix: str = "") -> str:
 
 def display_building_info(data: dict):
     """Display building identity and basic info."""
-    st.subheader("Building Identity")
+    from lib.storage import USE_TYPE_SQFT_COLUMNS
 
-    col1, col2, col3 = st.columns(3)
+    # Building Name (large) — from LL84 property_name or PLUTO owner_name
+    building_name = data.get('building_name', 'Unknown Building')
+    st.header(building_name if building_name else "Unknown Building")
 
-    with col1:
-        st.metric("BBL", data.get('bbl', 'N/A'))
-        st.write(f"**Borough:** {get_borough_name(data.get('bbl', ''))}")
+    # Address and Borough (prominent)
+    address = data.get('address', 'N/A')
+    borough = get_borough_name(data.get('bbl', ''))
+    st.subheader(f"{address}")
+    st.write(f"**Borough:** {borough}")
 
-    with col2:
-        st.metric("BIN", data.get('bin', 'N/A'))
-        st.write(f"**Compliance Pathway:** {data.get('compliance_pathway', 'N/A')}")
+    # BBL, BIN, DOF, Compliance — small underneath
+    bbl = data.get('bbl', '')
+    bin_val = data.get('bin', 'N/A')
+    dashed = bbl_to_dashed(bbl) if bbl else 'N/A'
+    pathway = data.get('compliance_pathway', 'N/A')
+    cal_year = data.get('ll84_calendar_year')
+    cal_year_str = f" | LL84 Data Year: **{cal_year}**" if cal_year else ""
 
-    with col3:
-        # Provide DOF lookup link
-        bbl = data.get('bbl', '')
-        if bbl:
-            dashed = bbl_to_dashed(bbl)
-            st.write(f"**DOF Lookup:** `{dashed}`")
-
-    st.write(f"**Address:** {data.get('address', 'N/A')}")
+    st.caption(f"BBL: {bbl} | BIN: {bin_val} | DOF: {dashed} | Compliance Pathway: {pathway}{cal_year_str}")
 
     # Building characteristics
     st.subheader("Building Characteristics")
-    char_cols = st.columns(4)
+    char_cols = st.columns(3)
     char_cols[0].metric("Year Built", data.get('year_built', 'N/A'))
     char_cols[1].metric("Property Type", data.get('property_type', 'N/A'))
-    char_cols[2].metric("Gross Floor Area", format_number(data.get('gfa'), " sqft"))
-    char_cols[3].metric("Energy Star Score", data.get('energy_star_score', 'N/A'))
+    char_cols[2].metric("Energy Star Score", data.get('energy_star_score', 'N/A'))
+
+    # GFA — Self Reported vs Calculated
+    gfa_cols = st.columns(2)
+    gfa_sr = data.get('gfa_self_reported') or data.get('gfa')
+    gfa_calc = data.get('gfa_calculated')
+    gfa_cols[0].metric("GFA — Self Reported", format_number(gfa_sr, " sqft"))
+    gfa_cols[1].metric("GFA — Calculated", format_number(gfa_calc, " sqft"))
+
+    # Non-zero use types with square footage
+    st.subheader("Use Types")
+    use_types_found = {}
+    for col in USE_TYPE_SQFT_COLUMNS:
+        value = data.get(col)
+        if value and value > 0:
+            readable_name = col.replace('_sqft', '').replace('_', ' ').title()
+            use_types_found[readable_name] = value
+
+    if use_types_found:
+        # Display as columns of chips/text
+        ut_cols = st.columns(min(len(use_types_found), 4))
+        for i, (name, sqft) in enumerate(sorted(use_types_found.items(), key=lambda x: -x[1])):
+            ut_cols[i % len(ut_cols)].write(f"**{name}:** {sqft:,.0f} sqft")
+    else:
+        st.info("No use-type square footage data available")
 
     # Debug: Raw data from Step 1
     with st.expander("Debug: Raw Identity Data", expanded=False):
@@ -118,14 +150,49 @@ def display_building_info(data: dict):
 
 
 def display_energy_data(data: dict):
-    """Display LL84 energy benchmarking data."""
+    """Display LL84 energy benchmarking data with native + kBtu units."""
+    from lib.conversions import kwh_to_kbtu, kbtu_to_therms, kbtu_to_gallons_fuel_oil, kbtu_to_mlbs_steam
+
     st.subheader("Energy Usage (LL84)")
 
+    # Show calendar year if available
+    cal_year = data.get('ll84_calendar_year')
+    if cal_year:
+        st.caption(f"LL84 Data Year: {cal_year}")
+
     energy_cols = st.columns(4)
-    energy_cols[0].metric("Electricity", format_number(data.get('electricity_kwh'), " kWh"))
-    energy_cols[1].metric("Natural Gas", format_number(data.get('natural_gas_kbtu'), " kBtu"))
-    energy_cols[2].metric("Fuel Oil #2", format_number(data.get('fuel_oil_kbtu'), " kBtu"))
-    energy_cols[3].metric("District Steam", format_number(data.get('steam_kbtu'), " kBtu"))
+
+    # Electricity: native is kWh, show kBtu conversion
+    elec_kwh = data.get('electricity_kwh')
+    if elec_kwh and elec_kwh > 0:
+        energy_cols[0].metric("Electricity", f"{elec_kwh:,.0f} kWh")
+        energy_cols[0].caption(f"{kwh_to_kbtu(elec_kwh):,.0f} kBtu")
+    else:
+        energy_cols[0].metric("Electricity", "N/A")
+
+    # Natural Gas: stored as kBtu, show therms conversion
+    gas_kbtu = data.get('natural_gas_kbtu')
+    if gas_kbtu and gas_kbtu > 0:
+        energy_cols[1].metric("Natural Gas", f"{kbtu_to_therms(gas_kbtu):,.0f} therms")
+        energy_cols[1].caption(f"{gas_kbtu:,.0f} kBtu")
+    else:
+        energy_cols[1].metric("Natural Gas", "N/A")
+
+    # Fuel Oil #2: stored as kBtu, show gallons conversion
+    oil_kbtu = data.get('fuel_oil_kbtu')
+    if oil_kbtu and oil_kbtu > 0:
+        energy_cols[2].metric("Fuel Oil #2", f"{kbtu_to_gallons_fuel_oil(oil_kbtu):,.0f} gal")
+        energy_cols[2].caption(f"{oil_kbtu:,.0f} kBtu")
+    else:
+        energy_cols[2].metric("Fuel Oil #2", "N/A")
+
+    # District Steam: stored as kBtu, show Mlbs conversion
+    steam_kbtu = data.get('steam_kbtu')
+    if steam_kbtu and steam_kbtu > 0:
+        energy_cols[3].metric("District Steam", f"{kbtu_to_mlbs_steam(steam_kbtu):,.1f} Mlbs")
+        energy_cols[3].caption(f"{steam_kbtu:,.0f} kBtu")
+    else:
+        energy_cols[3].metric("District Steam", "N/A")
 
     # Site EUI if available
     site_eui = data.get('site_eui')
@@ -164,61 +231,167 @@ def display_energy_data(data: dict):
         st.info("No LL87 audit data available for this building (not in ll87_raw table)")
 
 
+def _display_penalty_results(ghg, limit, penalty, period_label):
+    """Display penalty results for a single compliance period."""
+    st.markdown(f"### {period_label}")
+    if ghg is not None:
+        st.metric("GHG Emissions", f"{float(ghg):,.1f} tCO2e")
+        st.metric("Emissions Limit", f"{float(limit):,.1f} tCO2e" if limit else "N/A")
+
+        excess = (float(ghg) - float(limit)) if limit else 0
+        if excess > 0:
+            st.metric("Excess Emissions", f"{excess:,.1f} tCO2e", delta=f"+{excess:,.1f}", delta_color="inverse")
+        else:
+            st.metric("Excess Emissions", "0 tCO2e (compliant)")
+
+        st.metric("Annual Penalty", format_currency(float(penalty) if penalty else 0))
+    else:
+        st.info(f"No penalty data available for {period_label}")
+
+
 def display_penalties(data: dict):
-    """Display GHG emissions and LL97 penalty calculations."""
+    """Display editable LL97 penalty calculator with recalculation."""
+    from lib.calculations import calculate_ll97_penalty, extract_use_type_sqft
+    from lib.storage import USE_TYPE_SQFT_COLUMNS, upsert_building_metrics
+
     st.subheader("LL97 Carbon Penalties")
 
     st.markdown("""
     LL97 imposes penalties on buildings that exceed emissions limits.
     Penalty rate: **$268 per metric ton CO2e** above the limit.
+    Edit energy inputs below to model scenarios, then recalculate.
     """)
 
-    # Check if this is stale cached data (no 'calculated' in data sources)
+    # Show calendar year
+    cal_year = data.get('ll84_calendar_year')
+    if cal_year:
+        st.caption(f"LL84 Data Year: {cal_year}")
+
+    # Check if this is stale cached data
     data_source = data.get('data_source', '')
     if data_source and 'calculated' not in data_source and data.get('ghg_emissions_2024_2029') is None:
         st.warning("This building was cached before penalty calculations were enabled. Check **Re-fetch live data** and submit again to calculate penalties.")
 
+    # --- Editable Energy Inputs ---
+    st.markdown("#### Energy Inputs")
+    input_cols = st.columns(4)
+
+    elec_val = input_cols[0].number_input(
+        "Electricity (kWh)", value=float(data.get('electricity_kwh') or 0),
+        min_value=0.0, step=1000.0, format="%.0f", key="penalty_elec_kwh"
+    )
+    gas_val = input_cols[1].number_input(
+        "Natural Gas (kBtu)", value=float(data.get('natural_gas_kbtu') or 0),
+        min_value=0.0, step=1000.0, format="%.0f", key="penalty_gas_kbtu"
+    )
+    oil_val = input_cols[2].number_input(
+        "Fuel Oil #2 (kBtu)", value=float(data.get('fuel_oil_kbtu') or 0),
+        min_value=0.0, step=1000.0, format="%.0f", key="penalty_oil_kbtu"
+    )
+    steam_val = input_cols[3].number_input(
+        "District Steam (kBtu)", value=float(data.get('steam_kbtu') or 0),
+        min_value=0.0, step=1000.0, format="%.0f", key="penalty_steam_kbtu"
+    )
+
+    # --- Editable Use-Type Square Footage ---
+    st.markdown("#### Use-Type Square Footage")
+    use_types_with_data = {}
+    for col in USE_TYPE_SQFT_COLUMNS:
+        value = data.get(col)
+        if value and value > 0:
+            readable_name = col.replace('_sqft', '').replace('_', ' ').title()
+            use_types_with_data[col] = (readable_name, value)
+
+    edited_use_types = {}
+    if use_types_with_data:
+        ut_cols = st.columns(min(len(use_types_with_data), 3))
+        for i, (col, (name, sqft)) in enumerate(use_types_with_data.items()):
+            edited_val = ut_cols[i % len(ut_cols)].number_input(
+                f"{name} (sqft)", value=float(sqft),
+                min_value=0.0, step=1000.0, format="%.0f",
+                key=f"ut_{col}"
+            )
+            edited_use_types[col.replace('_sqft', '')] = edited_val
+    else:
+        st.info("No use-type square footage data available")
+
+    # --- Recalculate Button ---
+    btn_cols = st.columns([1, 1, 3])
+
+    if btn_cols[0].button("Recalculate Penalties", key="recalc_penalties"):
+        recalc = calculate_ll97_penalty(
+            electricity_kwh=elec_val if elec_val > 0 else None,
+            natural_gas_kbtu=gas_val if gas_val > 0 else None,
+            fuel_oil_kbtu=oil_val if oil_val > 0 else None,
+            steam_kbtu=steam_val if steam_val > 0 else None,
+            use_type_sqft=edited_use_types
+        )
+        st.session_state.recalculated_penalties = recalc
+        st.session_state.edited_energy_inputs = {
+            'electricity_kwh': elec_val if elec_val > 0 else None,
+            'natural_gas_kbtu': gas_val if gas_val > 0 else None,
+            'fuel_oil_kbtu': oil_val if oil_val > 0 else None,
+            'steam_kbtu': steam_val if steam_val > 0 else None,
+        }
+        st.rerun()
+
+    # --- Display Results ---
+    penalties = st.session_state.recalculated_penalties
+    if penalties and any(v is not None for v in penalties.values()):
+        st.success("Showing recalculated penalties (edited inputs)")
+    else:
+        penalties = {
+            'ghg_emissions_2024_2029': data.get('ghg_emissions_2024_2029'),
+            'emissions_limit_2024_2029': data.get('emissions_limit_2024_2029'),
+            'penalty_2024_2029': data.get('penalty_2024_2029'),
+            'ghg_emissions_2030_2034': data.get('ghg_emissions_2030_2034'),
+            'emissions_limit_2030_2034': data.get('emissions_limit_2030_2034'),
+            'penalty_2030_2034': data.get('penalty_2030_2034'),
+        }
+
     col1, col2 = st.columns(2)
-
     with col1:
-        st.markdown("### 2024-2029 Period")
-        ghg_1 = data.get('ghg_emissions_2024_2029')
-        limit_1 = data.get('emissions_limit_2024_2029')
-        penalty_1 = data.get('penalty_2024_2029')
-
-        if ghg_1 is not None:
-            st.metric("GHG Emissions", f"{ghg_1:,.1f} tCO2e")
-            st.metric("Emissions Limit", f"{limit_1:,.1f} tCO2e" if limit_1 else "N/A")
-
-            excess_1 = (ghg_1 - limit_1) if limit_1 else 0
-            if excess_1 > 0:
-                st.metric("Excess Emissions", f"{excess_1:,.1f} tCO2e", delta=f"+{excess_1:,.1f}", delta_color="inverse")
-            else:
-                st.metric("Excess Emissions", "0 tCO2e (compliant)")
-
-            st.metric("Annual Penalty", format_currency(penalty_1))
-        else:
-            st.info("No penalty data available for 2024-2029")
-
+        _display_penalty_results(
+            penalties.get('ghg_emissions_2024_2029'),
+            penalties.get('emissions_limit_2024_2029'),
+            penalties.get('penalty_2024_2029'),
+            "2024-2029 Period"
+        )
     with col2:
-        st.markdown("### 2030-2034 Period")
-        ghg_2 = data.get('ghg_emissions_2030_2034')
-        limit_2 = data.get('emissions_limit_2030_2034')
-        penalty_2 = data.get('penalty_2030_2034')
+        _display_penalty_results(
+            penalties.get('ghg_emissions_2030_2034'),
+            penalties.get('emissions_limit_2030_2034'),
+            penalties.get('penalty_2030_2034'),
+            "2030-2034 Period"
+        )
 
-        if ghg_2 is not None:
-            st.metric("GHG Emissions", f"{ghg_2:,.1f} tCO2e")
-            st.metric("Emissions Limit", f"{limit_2:,.1f} tCO2e" if limit_2 else "N/A")
+    # --- Save Edits to Supabase ---
+    if btn_cols[1].button("Save Edits to Supabase", key="save_penalties"):
+        save_data = {'bbl': data.get('bbl')}
 
-            excess_2 = (ghg_2 - limit_2) if limit_2 else 0
-            if excess_2 > 0:
-                st.metric("Excess Emissions", f"{excess_2:,.1f} tCO2e", delta=f"+{excess_2:,.1f}", delta_color="inverse")
-            else:
-                st.metric("Excess Emissions", "0 tCO2e (compliant)")
+        # Save edited energy inputs if any
+        edited_energy = st.session_state.edited_energy_inputs
+        if edited_energy:
+            save_data.update({k: v for k, v in edited_energy.items() if v is not None})
 
-            st.metric("Annual Penalty", format_currency(penalty_2))
-        else:
-            st.info("No penalty data available for 2030-2034")
+        # Save edited use-type sqft
+        for col in USE_TYPE_SQFT_COLUMNS:
+            key = col.replace('_sqft', '')
+            if key in edited_use_types and edited_use_types[key] > 0:
+                save_data[col] = edited_use_types[key]
+
+        # Save recalculated penalties
+        recalc = st.session_state.recalculated_penalties
+        if recalc:
+            for k, v in recalc.items():
+                if v is not None:
+                    save_data[k] = float(v)
+
+        try:
+            upsert_building_metrics(save_data)
+            st.success("Penalty edits saved to Supabase!")
+        except Exception as e:
+            st.error(f"Save failed: {e}")
 
     # Debug panel
     with st.expander("Debug: Calculation Inputs", expanded=False):
@@ -240,10 +413,10 @@ def display_penalties(data: dict):
         st.markdown(f"**Has energy data:** {'Yes' if has_energy else 'No (all None/zero — penalty will be None)'}")
 
         st.markdown("#### Use-Type Square Footage")
-        from lib.storage import USE_TYPE_SQFT_COLUMNS
-        use_types_found = {col.replace('_sqft', ''): data.get(col) for col in USE_TYPE_SQFT_COLUMNS if data.get(col)}
-        if use_types_found:
-            for ut, sqft in use_types_found.items():
+        from lib.storage import USE_TYPE_SQFT_COLUMNS as _UT_COLS
+        use_types_debug = {col.replace('_sqft', ''): data.get(col) for col in _UT_COLS if data.get(col)}
+        if use_types_debug:
+            for ut, sqft in use_types_debug.items():
                 st.text(f"  {ut}: {sqft:,.0f} sqft")
         else:
             st.text("  (none found in data)")
@@ -257,9 +430,20 @@ def display_penalties(data: dict):
 
 
 def display_narratives(narratives: dict, data: dict):
-    """Display AI-generated system narratives."""
+    """Display editable AI-generated system narratives."""
+    from lib.storage import upsert_building_metrics
+
     st.subheader("System Narratives")
-    st.markdown("*AI-generated descriptions based on available building data*")
+    st.markdown("*AI-generated descriptions based on available building data. Edit below and save.*")
+
+    narrative_col_map = {
+        'Building Envelope': 'envelope_narrative',
+        'Heating System': 'heating_narrative',
+        'Cooling System': 'cooling_narrative',
+        'Air Distribution System': 'air_distribution_narrative',
+        'Ventilation System': 'ventilation_narrative',
+        'Domestic Hot Water System': 'dhw_narrative',
+    }
 
     if not narratives:
         st.info("No narratives generated yet")
@@ -270,7 +454,28 @@ def display_narratives(narratives: dict, data: dict):
                 if narrative.startswith("Error"):
                     st.error(narrative)
                 else:
-                    st.write(narrative)
+                    edited = st.text_area(
+                        f"Edit {category}",
+                        value=narrative,
+                        height=200,
+                        key=f"narrative_{category}",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state.edited_narratives[category] = edited
+
+    # Save button
+    if st.button("Save Narratives to Supabase", key="save_narratives"):
+        save_data = {'bbl': data.get('bbl')}
+        for category, col in narrative_col_map.items():
+            edited_val = st.session_state.edited_narratives.get(category)
+            if edited_val:
+                save_data[col] = edited_val
+
+        try:
+            upsert_building_metrics(save_data)
+            st.success("Narratives saved to Supabase!")
+        except Exception as e:
+            st.error(f"Save failed: {e}")
 
     # Debug: Show all fields sent to narrative prompts
     with st.expander("Debug: Narrative Generation Inputs", expanded=False):
@@ -306,6 +511,134 @@ def display_narratives(narratives: dict, data: dict):
         for section_name, section_data in equipment.items():
             st.markdown(f"**{section_name}:**")
             st.text(section_data)
+
+
+def display_database_record(data: dict):
+    """Display complete database record from building_metrics table."""
+    st.subheader("Database Record")
+    st.markdown("*Complete record stored in Supabase `building_metrics` table*")
+
+    # Show record metadata
+    meta_cols = st.columns(3)
+    meta_cols[0].metric("BBL", data.get('bbl', 'N/A'))
+    created = data.get('created_at', 'N/A')
+    updated = data.get('updated_at', 'N/A')
+    meta_cols[1].write(f"**Created:** {created}")
+    meta_cols[2].write(f"**Updated:** {updated}")
+
+    # Section 1: Identity Fields
+    with st.expander("Identity Fields (Step 1: LL97/GeoSearch)", expanded=True):
+        identity_fields = {
+            'Building Name': data.get('building_name'),
+            'BBL': data.get('bbl'),
+            'BIN': data.get('bin'),
+            'Address': data.get('address'),
+            'ZIP Code': data.get('zip_code'),
+            'Compliance Pathway': data.get('compliance_pathway'),
+        }
+        for label, value in identity_fields.items():
+            st.text(f"{label}: {value if value is not None else 'N/A'}")
+
+    # Section 2: Building Characteristics
+    with st.expander("Building Characteristics (Step 2: LL84/PLUTO)", expanded=True):
+        char_fields = {
+            'Year Built': data.get('year_built'),
+            'Property Type': data.get('property_type'),
+            'GFA - Self Reported (sqft)': data.get('gfa_self_reported') or data.get('gfa'),
+            'GFA - Calculated (sqft)': data.get('gfa_calculated'),
+            'Energy Star Score': data.get('energy_star_score'),
+        }
+        for label, value in char_fields.items():
+            st.text(f"{label}: {value if value is not None else 'N/A'}")
+
+    # Section 3: Energy Metrics
+    with st.expander("Energy Metrics (Step 2: LL84)", expanded=True):
+        energy_fields = {
+            'LL84 Calendar Year': data.get('ll84_calendar_year'),
+            'Electricity (kWh)': data.get('electricity_kwh'),
+            'Natural Gas (kBtu)': data.get('natural_gas_kbtu'),
+            'Fuel Oil #2 (kBtu)': data.get('fuel_oil_kbtu'),
+            'District Steam (kBtu)': data.get('steam_kbtu'),
+            'Site EUI (kBtu/sqft)': data.get('site_eui'),
+        }
+        for label, value in energy_fields.items():
+            st.text(f"{label}: {value if value is not None else 'N/A'}")
+
+    # Section 4: Use-Type Square Footage (67 columns)
+    with st.expander("Use-Type Square Footage (Step 2: LL84)", expanded=False):
+        from lib.storage import USE_TYPE_SQFT_COLUMNS
+        use_types_found = {}
+        for col in USE_TYPE_SQFT_COLUMNS:
+            value = data.get(col)
+            if value and value > 0:
+                # Convert column name to readable format
+                readable_name = col.replace('_sqft', '').replace('_', ' ').title()
+                use_types_found[readable_name] = value
+
+        if use_types_found:
+            st.write(f"**Found {len(use_types_found)} use types with square footage:**")
+            for name, sqft in sorted(use_types_found.items()):
+                st.text(f"  {name}: {sqft:,.0f} sqft")
+        else:
+            st.info("No use-type square footage data available")
+
+    # Section 5: LL87 Reference
+    with st.expander("LL87 Audit Reference (Step 3)", expanded=True):
+        ll87_fields = {
+            'LL87 Audit ID': data.get('ll87_audit_id'),
+            'LL87 Period': data.get('ll87_period'),
+        }
+        for label, value in ll87_fields.items():
+            st.text(f"{label}: {value if value is not None else 'N/A'}")
+
+    # Section 6: LL97 Penalty Calculations
+    with st.expander("LL97 Penalty Calculations (Step 4)", expanded=True):
+        st.markdown("### 2024-2029 Period")
+        period1_fields = {
+            'GHG Emissions (tCO2e)': data.get('ghg_emissions_2024_2029'),
+            'Emissions Limit (tCO2e)': data.get('emissions_limit_2024_2029'),
+            'Annual Penalty ($)': data.get('penalty_2024_2029'),
+        }
+        for label, value in period1_fields.items():
+            st.text(f"  {label}: {f'{value:,.2f}' if value is not None else 'N/A'}")
+
+        st.markdown("### 2030-2034 Period")
+        period2_fields = {
+            'GHG Emissions (tCO2e)': data.get('ghg_emissions_2030_2034'),
+            'Emissions Limit (tCO2e)': data.get('emissions_limit_2030_2034'),
+            'Annual Penalty ($)': data.get('penalty_2030_2034'),
+        }
+        for label, value in period2_fields.items():
+            st.text(f"  {label}: {f'{value:,.2f}' if value is not None else 'N/A'}")
+
+    # Section 7: AI-Generated Narratives
+    with st.expander("AI-Generated Narratives (Step 5)", expanded=False):
+        narrative_fields = {
+            'Building Envelope Narrative': data.get('envelope_narrative'),
+            'Heating System Narrative': data.get('heating_narrative'),
+            'Cooling System Narrative': data.get('cooling_narrative'),
+            'Air Distribution System Narrative': data.get('air_distribution_narrative'),
+            'Ventilation System Narrative': data.get('ventilation_narrative'),
+            'Domestic Hot Water System Narrative': data.get('dhw_narrative'),
+        }
+
+        for label, value in narrative_fields.items():
+            st.markdown(f"**{label}:**")
+            if value:
+                st.write(value)
+            else:
+                st.text("  (not generated)")
+            st.divider()
+
+    # Section 8: Data Source Tracking
+    with st.expander("Data Source Tracking", expanded=True):
+        tracking_fields = {
+            'Data Source': data.get('data_source'),
+            'Created At': data.get('created_at'),
+            'Updated At': data.get('updated_at'),
+        }
+        for label, value in tracking_fields.items():
+            st.text(f"{label}: {value if value is not None else 'N/A'}")
 
 
 # Main App
@@ -485,11 +818,12 @@ if st.session_state.building_data:
             st.warning("LL84 energy data not available for this building. Using PLUTO fallback for basic building metrics.")
 
     # Create tabs for different data sections
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Building Info",
         "Energy Data",
         "LL97 Penalties",
-        "System Narratives"
+        "System Narratives",
+        "Database Record"
     ])
 
     with tab1:
@@ -503,6 +837,15 @@ if st.session_state.building_data:
 
     with tab4:
         display_narratives(st.session_state.narratives, data)
+
+    with tab5:
+        display_database_record(data)
+
+    # Airtable stub button (Phase 4.1)
+    st.divider()
+    airtable_col1, airtable_col2, _ = st.columns([1, 1, 3])
+    airtable_col2.button("Push to Airtable", key="push_airtable", disabled=True,
+                         help="Airtable integration coming in Phase 4.1")
 
 # Footer with building count
 st.divider()

@@ -129,6 +129,10 @@ LL84_FIELD_MAP = {
     "site_eui_kbtu_ft": "site_eui",
     "energy_star_score": "energy_star_score",
 
+    # Phase 4: Calendar year and building name
+    "year_ending": "ll84_calendar_year",
+    "property_name": "building_name",
+
     # Use-type square footage fields (35 fields discovered from LL84 dataset)
     # Format: API field name -> internal column name (append _sqft to use type)
     "adult_education_gross_floor": "adult_education_sqft",
@@ -141,7 +145,6 @@ LL84_FIELD_MAP = {
     "data_center_gross_floor_area": "data_center_sqft",
     "distribution_center_gross": "distribution_center_sqft",
     "enclosed_mall_gross_floor": "enclosed_mall_sqft",
-    "energy_power_station_gross": "energy_power_station_sqft",
     "financial_office_gross_floor": "financial_office_sqft",
     "food_sales_gross_floor_area": "food_sales_sqft",
     "food_service_gross_floor": "food_service_sqft",
@@ -161,10 +164,10 @@ LL84_FIELD_MAP = {
     "restaurant_gross_floor_area": "restaurant_sqft",
     "retail_store_gross_floor": "retail_store_sqft",
     "self_storage_facility_gross": "self_storage_facility_sqft",
-    "senior_living_community_gross": "senior_living_community_sqft",
+    "senior_living_community_gross": "senior_care_community_sqft",
     "social_meeting_hall_gross": "social_meeting_hall_sqft",
     "strip_mall_gross_floor_area": "strip_mall_sqft",
-    "supermarket_grocery_gross": "supermarket_grocery_sqft",
+    "supermarket_grocery_gross": "supermarket_grocery_store_sqft",
     "worship_facility_gross_floor": "worship_facility_sqft",
 }
 
@@ -255,7 +258,7 @@ def _map_ll84_result(raw_data: Dict[str, Any]) -> Dict[str, Any]:
         value = raw_data.get(api_field)
 
         if value is not None and value != "":
-            if internal_field in ["year_built"]:
+            if internal_field in ["year_built", "ll84_calendar_year"]:
                 mapped_data[internal_field] = _safe_int(value)
             elif internal_field.endswith("_sqft") or internal_field in [
                 "gfa", "electricity_kwh", "natural_gas_kbtu",
@@ -268,6 +271,10 @@ def _map_ll84_result(raw_data: Dict[str, Any]) -> Dict[str, Any]:
                 mapped_data[internal_field] = str(value)
         else:
             mapped_data[internal_field] = None
+
+    # Phase 4: Populate gfa_self_reported from same source as gfa
+    if mapped_data.get('gfa') is not None:
+        mapped_data['gfa_self_reported'] = mapped_data['gfa']
 
     return mapped_data
 
@@ -302,7 +309,7 @@ def call_ll84_api_by_bbl(
         results = client.get(
             "5zyy-y8am",
             where=f"nyc_borough_block_and_lot='{bbl}'",
-            order="last_modified_date_property DESC",
+            order="year_ending DESC",
             limit=1
         )
 
@@ -366,7 +373,7 @@ def call_ll84_api(
                 results = client.get(
                     "5zyy-y8am",
                     where=f"nyc_building_identification LIKE '%{single_bin}%'",
-                    order="last_modified_date_property DESC",
+                    order="year_ending DESC",
                     limit=1
                 )
 
