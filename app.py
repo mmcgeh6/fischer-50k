@@ -23,6 +23,29 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# --- Password Gate ---
+def check_password():
+    """Simple password gate using st.secrets['APP_PASSWORD']."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    st.markdown("### Fischer 50K Building Lead Tool")
+    st.markdown("Enter the team password to continue.")
+    password = st.text_input("Password", type="password", key="pw_input")
+    if st.button("Log in", type="primary"):
+        if password == st.secrets.get("APP_PASSWORD", ""):
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+if not check_password():
+    st.stop()
+
 # Run schema migration once per session to ensure penalty and narrative columns exist
 if 'migration_done' not in st.session_state:
     try:
