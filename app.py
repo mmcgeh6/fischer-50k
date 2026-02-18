@@ -97,11 +97,13 @@ def display_building_info(data: dict):
 
     # Building Name (large) — from LL84 property_name or PLUTO owner_name
     building_name = data.get('building_name', 'Unknown Building')
+    st.markdown('<p style="font-size: 0.875rem; color: rgba(49, 51, 63, 0.6); margin-bottom: -1rem;">Building Name</p>', unsafe_allow_html=True)
     st.header(building_name if building_name else "Unknown Building")
 
     # Address and Borough (prominent)
     address = data.get('address', 'N/A')
     borough = get_borough_name(data.get('bbl', ''))
+    st.markdown('<p style="font-size: 0.875rem; color: rgba(49, 51, 63, 0.6); margin-bottom: -1rem;">Address</p>', unsafe_allow_html=True)
     st.subheader(f"{address}")
     st.write(f"**Borough:** {borough}")
 
