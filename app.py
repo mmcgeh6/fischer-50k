@@ -20,8 +20,9 @@ st.set_page_config(
     page_title="Fischer 50K Building Lead Tool",
     page_icon="🏢",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
+
 
 # --- Password Gate ---
 def check_password():
@@ -50,8 +51,9 @@ if not check_password():
 if 'migration_done' not in st.session_state:
     try:
         migrate_add_calculation_columns()
-        from lib.storage import migrate_phase4_columns
+        from lib.storage import migrate_phase4_columns, migrate_phase4_native_units
         migrate_phase4_columns()
+        migrate_phase4_native_units()
         st.session_state.migration_done = True
     except Exception as e:
         import logging
@@ -148,30 +150,7 @@ def display_building_info(data: dict):
     else:
         st.info("No use-type square footage data available")
 
-    # Debug: Raw data from Step 1
-    with st.expander("Debug: Raw Identity Data", expanded=False):
-        st.markdown("**Data Sources:** `{}`".format(data.get('data_source', 'N/A')))
-
-        if data.get('_ll97_query_raw'):
-            st.markdown("#### LL97 Covered Buildings Query Result")
-            st.json(data['_ll97_query_raw'])
-        else:
-            st.info("No LL97 query data (building not in Covered Buildings List)")
-
-        if data.get('_pluto_api_raw'):
-            st.markdown("#### PLUTO API Response")
-            st.json(data['_pluto_api_raw'])
-
-        if data.get('_geosearch_api_raw'):
-            st.markdown("#### GeoSearch API Response")
-            st.json(data['_geosearch_api_raw'])
-
-        # Show resolution metadata for address inputs
-        if data.get('input_type') == 'address':
-            st.markdown("#### Address Resolution")
-            st.text(f"  Input: {data.get('resolved_from_address', 'N/A')}")
-            st.text(f"  Resolved BBL: {data.get('resolved_bbl', 'N/A')}")
-            st.text(f"  Confidence: {data.get('geosearch_confidence', 'N/A')}")
+    # Debug info is now in the sidebar — see render_debug_sidebar()
 
 
 def display_energy_data(data: dict):
@@ -224,34 +203,13 @@ def display_energy_data(data: dict):
     if site_eui:
         st.metric("Site EUI", f"{site_eui:.1f} kBtu/sqft")
 
-    # Debug: Raw LL84 API response
-    with st.expander("Debug: Raw LL84 API Response", expanded=False):
-        if data.get('_ll84_api_raw'):
-            st.markdown("**Full Socrata API record** (pre-mapping):")
-            st.json(data['_ll84_api_raw'])
+    # Debug info is now in the sidebar — see render_debug_sidebar()
 
-            st.markdown("#### Field Mapping Applied")
-            from lib.nyc_apis import LL84_FIELD_MAP
-            mapped_view = {}
-            for api_field, internal_field in LL84_FIELD_MAP.items():
-                raw_val = data['_ll84_api_raw'].get(api_field)
-                mapped_val = data.get(internal_field)
-                if raw_val is not None or mapped_val is not None:
-                    mapped_view[f"{api_field} -> {internal_field}"] = {
-                        "raw": raw_val,
-                        "mapped": mapped_val
-                    }
-            st.json(mapped_view)
-        else:
-            st.info("No raw LL84 API response available (LL84 data may be from cache or unavailable)")
-
-    # LL87 Audit info
+    # LL87 Audit info (debug raw data is in the sidebar)
     st.subheader("LL87 Audit Data")
     if data.get('ll87_raw'):
         st.write(f"**Audit Period:** {data.get('ll87_period', 'Unknown')}")
         st.write(f"**Audit ID:** {data.get('ll87_audit_id', 'Unknown')}")
-        with st.expander("Debug: Raw LL87 Data", expanded=False):
-            st.json(data.get('ll87_raw'))
     else:
         st.info("No LL87 audit data available for this building (not in ll87_raw table)")
 
@@ -297,26 +255,95 @@ def display_penalties(data: dict):
     if data_source and 'calculated' not in data_source and data.get('ghg_emissions_2024_2029') is None:
         st.warning("This building was cached before penalty calculations were enabled. Check **Re-fetch live data** and submit again to calculate penalties.")
 
-    # --- Editable Energy Inputs ---
+    # --- Editable Energy Inputs (native units with kBtu conversion) ---
     st.markdown("#### Energy Inputs")
+    from lib.conversions import (
+        kwh_to_kbtu, kbtu_to_therms, kbtu_to_gallons_fuel_oil, kbtu_to_mlbs_steam,
+        therms_to_kbtu, gallons_to_kbtu, mlbs_to_kbtu
+    )
+
     input_cols = st.columns(4)
 
-    elec_val = input_cols[0].number_input(
+    # Electricity: kWh is already the native unit
+    elec_kwh_val = input_cols[0].number_input(
         "Electricity (kWh)", value=float(data.get('electricity_kwh') or 0),
         min_value=0.0, step=1000.0, format="%.0f", key="penalty_elec_kwh"
     )
-    gas_val = input_cols[1].number_input(
-        "Natural Gas (kBtu)", value=float(data.get('natural_gas_kbtu') or 0),
-        min_value=0.0, step=1000.0, format="%.0f", key="penalty_gas_kbtu"
+
+    # Natural Gas: stored as kBtu, input in therms
+    gas_kbtu_stored = float(data.get('natural_gas_kbtu') or 0)
+    gas_therms_val = input_cols[1].number_input(
+        "Natural Gas (therms)", value=kbtu_to_therms(gas_kbtu_stored),
+        min_value=0.0, step=100.0, format="%.0f", key="penalty_gas_therms"
     )
-    oil_val = input_cols[2].number_input(
-        "Fuel Oil #2 (kBtu)", value=float(data.get('fuel_oil_kbtu') or 0),
-        min_value=0.0, step=1000.0, format="%.0f", key="penalty_oil_kbtu"
+    gas_kbtu_val = therms_to_kbtu(gas_therms_val)
+    input_cols[1].caption(f"= {gas_kbtu_val:,.0f} kBtu")
+
+    # Fuel Oil #2: stored as kBtu, input in gallons
+    oil_kbtu_stored = float(data.get('fuel_oil_kbtu') or 0)
+    oil_gal_val = input_cols[2].number_input(
+        "Fuel Oil #2 (gal)", value=kbtu_to_gallons_fuel_oil(oil_kbtu_stored),
+        min_value=0.0, step=100.0, format="%.0f", key="penalty_oil_gal"
     )
-    steam_val = input_cols[3].number_input(
-        "District Steam (kBtu)", value=float(data.get('steam_kbtu') or 0),
-        min_value=0.0, step=1000.0, format="%.0f", key="penalty_steam_kbtu"
+    oil_kbtu_val = gallons_to_kbtu(oil_gal_val)
+    input_cols[2].caption(f"= {oil_kbtu_val:,.0f} kBtu")
+
+    # District Steam: stored as kBtu, input in Mlbs
+    steam_kbtu_stored = float(data.get('steam_kbtu') or 0)
+    steam_mlbs_val = input_cols[3].number_input(
+        "District Steam (Mlbs)", value=kbtu_to_mlbs_steam(steam_kbtu_stored),
+        min_value=0.0, step=1.0, format="%.1f", key="penalty_steam_mlbs"
     )
+    steam_kbtu_val = mlbs_to_kbtu(steam_mlbs_val)
+    input_cols[3].caption(f"= {steam_kbtu_val:,.0f} kBtu")
+
+    # --- Blended Utility Rates & Annual Energy Cost ---
+    st.markdown("#### Blended Utility Rates")
+    st.caption("Edit rates to estimate annual energy costs. These are blended averages.")
+
+    rate_cols = st.columns(4)
+
+    elec_rate = rate_cols[0].number_input(
+        "Electricity ($/kWh)", value=0.26,
+        min_value=0.0, step=0.01, format="%.2f", key="rate_elec"
+    )
+    gas_rate = rate_cols[1].number_input(
+        "Nat. Gas ($/therm)", value=1.60,
+        min_value=0.0, step=0.10, format="%.2f", key="rate_gas"
+    )
+    steam_rate = rate_cols[2].number_input(
+        "Steam ($/Mlb)", value=50.00,
+        min_value=0.0, step=1.0, format="%.2f", key="rate_steam"
+    )
+
+    # Fuel oil rate: only show if building has fuel oil data
+    has_fuel_oil = oil_gal_val > 0
+    if has_fuel_oil:
+        oil_rate = rate_cols[3].number_input(
+            "Fuel Oil ($/gal)", value=4.00,
+            min_value=0.0, step=0.25, format="%.2f", key="rate_oil"
+        )
+    else:
+        oil_rate = 0.0
+
+    # Calculate estimated annual energy cost
+    elec_cost = elec_kwh_val * elec_rate
+    gas_cost = gas_therms_val * gas_rate
+    steam_cost = steam_mlbs_val * steam_rate
+    oil_cost = oil_gal_val * oil_rate if has_fuel_oil else 0.0
+    total_energy_cost = elec_cost + gas_cost + steam_cost + oil_cost
+
+    st.markdown("#### Estimated Annual Energy Cost")
+    num_cost_cols = 4 + (1 if has_fuel_oil else 0)
+    cost_cols = st.columns(num_cost_cols)
+    cost_cols[0].metric("Electricity", format_currency(elec_cost))
+    cost_cols[1].metric("Natural Gas", format_currency(gas_cost))
+    cost_cols[2].metric("Steam", format_currency(steam_cost))
+    idx = 3
+    if has_fuel_oil:
+        cost_cols[idx].metric("Fuel Oil", format_currency(oil_cost))
+        idx += 1
+    cost_cols[idx].metric("Total Energy Cost", format_currency(total_energy_cost))
 
     # --- Editable Use-Type Square Footage ---
     st.markdown("#### Use-Type Square Footage")
@@ -345,18 +372,21 @@ def display_penalties(data: dict):
 
     if btn_cols[0].button("Recalculate Penalties", key="recalc_penalties"):
         recalc = calculate_ll97_penalty(
-            electricity_kwh=elec_val if elec_val > 0 else None,
-            natural_gas_kbtu=gas_val if gas_val > 0 else None,
-            fuel_oil_kbtu=oil_val if oil_val > 0 else None,
-            steam_kbtu=steam_val if steam_val > 0 else None,
+            electricity_kwh=elec_kwh_val if elec_kwh_val > 0 else None,
+            natural_gas_kbtu=gas_kbtu_val if gas_kbtu_val > 0 else None,
+            fuel_oil_kbtu=oil_kbtu_val if oil_kbtu_val > 0 else None,
+            steam_kbtu=steam_kbtu_val if steam_kbtu_val > 0 else None,
             use_type_sqft=edited_use_types
         )
         st.session_state.recalculated_penalties = recalc
         st.session_state.edited_energy_inputs = {
-            'electricity_kwh': elec_val if elec_val > 0 else None,
-            'natural_gas_kbtu': gas_val if gas_val > 0 else None,
-            'fuel_oil_kbtu': oil_val if oil_val > 0 else None,
-            'steam_kbtu': steam_val if steam_val > 0 else None,
+            'electricity_kwh': elec_kwh_val if elec_kwh_val > 0 else None,
+            'natural_gas_kbtu': gas_kbtu_val if gas_kbtu_val > 0 else None,
+            'fuel_oil_kbtu': oil_kbtu_val if oil_kbtu_val > 0 else None,
+            'steam_kbtu': steam_kbtu_val if steam_kbtu_val > 0 else None,
+            'natural_gas_therms': gas_therms_val if gas_therms_val > 0 else None,
+            'fuel_oil_gallons': oil_gal_val if oil_gal_val > 0 else None,
+            'steam_mlbs': steam_mlbs_val if steam_mlbs_val > 0 else None,
         }
         st.rerun()
 
@@ -418,40 +448,7 @@ def display_penalties(data: dict):
         except Exception as e:
             st.error(f"Save failed: {e}")
 
-    # Debug panel
-    with st.expander("Debug: Calculation Inputs", expanded=False):
-        st.markdown("**Data Sources:** `{}`".format(data.get('data_source', 'N/A')))
-
-        st.markdown("#### Energy Inputs (Step 4)")
-        debug_cols = st.columns(4)
-        debug_cols[0].code(f"electricity_kwh: {data.get('electricity_kwh')}")
-        debug_cols[1].code(f"natural_gas_kbtu: {data.get('natural_gas_kbtu')}")
-        debug_cols[2].code(f"fuel_oil_kbtu: {data.get('fuel_oil_kbtu')}")
-        debug_cols[3].code(f"steam_kbtu: {data.get('steam_kbtu')}")
-
-        has_energy = any([
-            data.get('electricity_kwh') and data.get('electricity_kwh') > 0,
-            data.get('natural_gas_kbtu') and data.get('natural_gas_kbtu') > 0,
-            data.get('fuel_oil_kbtu') and data.get('fuel_oil_kbtu') > 0,
-            data.get('steam_kbtu') and data.get('steam_kbtu') > 0,
-        ])
-        st.markdown(f"**Has energy data:** {'Yes' if has_energy else 'No (all None/zero — penalty will be None)'}")
-
-        st.markdown("#### Use-Type Square Footage")
-        from lib.storage import USE_TYPE_SQFT_COLUMNS as _UT_COLS
-        use_types_debug = {col.replace('_sqft', ''): data.get(col) for col in _UT_COLS if data.get(col)}
-        if use_types_debug:
-            for ut, sqft in use_types_debug.items():
-                st.text(f"  {ut}: {sqft:,.0f} sqft")
-        else:
-            st.text("  (none found in data)")
-
-        st.markdown("#### Penalty Fields in Data")
-        penalty_fields = ['ghg_emissions_2024_2029', 'emissions_limit_2024_2029', 'penalty_2024_2029',
-                          'ghg_emissions_2030_2034', 'emissions_limit_2030_2034', 'penalty_2030_2034']
-        for field in penalty_fields:
-            val = data.get(field)
-            st.text(f"  {field}: {val}")
+    # Debug info is now in the sidebar — see render_debug_sidebar()
 
 
 def display_narratives(narratives: dict, data: dict):
@@ -502,8 +499,106 @@ def display_narratives(narratives: dict, data: dict):
         except Exception as e:
             st.error(f"Save failed: {e}")
 
-    # Debug: Show all fields sent to narrative prompts
-    with st.expander("Debug: Narrative Generation Inputs", expanded=False):
+    # Debug info is now in the sidebar — see render_debug_sidebar()
+
+
+def render_debug_sidebar(data: dict):
+    """Render all debug/raw data in the sidebar for side-by-side viewing.
+
+    Uses Streamlit's native st.sidebar which provides independent scrolling
+    from the main page content. Teal background is applied via CSS injection.
+    """
+    st.sidebar.markdown("### 🛠️ Debug Panel")
+    st.sidebar.caption("Raw data from each waterfall step")
+
+    # Section 1: Raw Identity Data (from Building Info tab)
+    with st.sidebar.expander("Raw Identity Data (Step 1)", expanded=False):
+        st.markdown("**Data Sources:** `{}`".format(data.get('data_source', 'N/A')))
+
+        if data.get('_ll97_query_raw'):
+            st.markdown("#### LL97 Covered Buildings Query Result")
+            st.json(data['_ll97_query_raw'])
+        else:
+            st.info("No LL97 query data (building not in Covered Buildings List)")
+
+        if data.get('_pluto_api_raw'):
+            st.markdown("#### PLUTO API Response")
+            st.json(data['_pluto_api_raw'])
+
+        if data.get('_geosearch_api_raw'):
+            st.markdown("#### GeoSearch API Response")
+            st.json(data['_geosearch_api_raw'])
+
+        if data.get('input_type') == 'address':
+            st.markdown("#### Address Resolution")
+            st.text(f"  Input: {data.get('resolved_from_address', 'N/A')}")
+            st.text(f"  Resolved BBL: {data.get('resolved_bbl', 'N/A')}")
+            st.text(f"  Confidence: {data.get('geosearch_confidence', 'N/A')}")
+
+    # Section 2: Raw LL84 API Response (from Energy Data tab)
+    with st.sidebar.expander("Raw LL84 API Response (Step 2)", expanded=False):
+        if data.get('_ll84_api_raw'):
+            st.markdown("**Full Socrata API record** (pre-mapping):")
+            st.json(data['_ll84_api_raw'])
+
+            st.markdown("#### Field Mapping Applied")
+            from lib.nyc_apis import LL84_FIELD_MAP
+            mapped_view = {}
+            for api_field, internal_field in LL84_FIELD_MAP.items():
+                raw_val = data['_ll84_api_raw'].get(api_field)
+                mapped_val = data.get(internal_field)
+                if raw_val is not None or mapped_val is not None:
+                    mapped_view[f"{api_field} -> {internal_field}"] = {
+                        "raw": raw_val,
+                        "mapped": mapped_val
+                    }
+            st.json(mapped_view)
+        else:
+            st.info("No raw LL84 API response available (LL84 data may be from cache or unavailable)")
+
+    # Section 3: Raw LL87 Data (from Energy Data tab)
+    with st.sidebar.expander("Raw LL87 Data (Step 3)", expanded=False):
+        if data.get('ll87_raw'):
+            st.json(data.get('ll87_raw'))
+        else:
+            st.info("No LL87 audit data available for this building")
+
+    # Section 4: Calculation Inputs (from Penalties tab)
+    with st.sidebar.expander("Calculation Inputs (Step 4)", expanded=False):
+        st.markdown("**Data Sources:** `{}`".format(data.get('data_source', 'N/A')))
+
+        st.markdown("#### Energy Inputs")
+        st.code(f"electricity_kwh: {data.get('electricity_kwh')}")
+        st.code(f"natural_gas_kbtu: {data.get('natural_gas_kbtu')}")
+        st.code(f"fuel_oil_kbtu: {data.get('fuel_oil_kbtu')}")
+        st.code(f"steam_kbtu: {data.get('steam_kbtu')}")
+
+        has_energy = any([
+            data.get('electricity_kwh') and data.get('electricity_kwh') > 0,
+            data.get('natural_gas_kbtu') and data.get('natural_gas_kbtu') > 0,
+            data.get('fuel_oil_kbtu') and data.get('fuel_oil_kbtu') > 0,
+            data.get('steam_kbtu') and data.get('steam_kbtu') > 0,
+        ])
+        st.markdown(f"**Has energy data:** {'Yes' if has_energy else 'No (all None/zero — penalty will be None)'}")
+
+        st.markdown("#### Use-Type Square Footage")
+        from lib.storage import USE_TYPE_SQFT_COLUMNS as _UT_COLS_DBG
+        use_types_debug = {col.replace('_sqft', ''): data.get(col) for col in _UT_COLS_DBG if data.get(col)}
+        if use_types_debug:
+            for ut, sqft in use_types_debug.items():
+                st.text(f"  {ut}: {sqft:,.0f} sqft")
+        else:
+            st.text("  (none found in data)")
+
+        st.markdown("#### Penalty Fields in Data")
+        penalty_fields = ['ghg_emissions_2024_2029', 'emissions_limit_2024_2029', 'penalty_2024_2029',
+                          'ghg_emissions_2030_2034', 'emissions_limit_2030_2034', 'penalty_2030_2034']
+        for field in penalty_fields:
+            val = data.get(field)
+            st.text(f"  {field}: {val}")
+
+    # Section 5: Narrative Generation Inputs (from Narratives tab)
+    with st.sidebar.expander("Narrative Inputs (Step 5)", expanded=False):
         st.markdown("#### Building Context")
         context_fields = {
             'Year Built': data.get('year_built'),
@@ -518,15 +613,15 @@ def display_narratives(narratives: dict, data: dict):
         st.json(context_fields)
 
         st.markdown("#### Existing Narratives")
-        narrative_cols = {
-            'Building Envelope Narrative': 'envelope_narrative',
-            'Heating System Narrative': 'heating_narrative',
-            'Cooling System Narrative': 'cooling_narrative',
-            'Air Distribution System Narrative': 'air_distribution_narrative',
-            'Ventilation System Narrative': 'ventilation_narrative',
-            'Domestic Hot Water System Narrative': 'dhw_narrative',
+        narrative_cols_dbg = {
+            'Building Envelope': 'envelope_narrative',
+            'Heating System': 'heating_narrative',
+            'Cooling System': 'cooling_narrative',
+            'Air Distribution': 'air_distribution_narrative',
+            'Ventilation': 'ventilation_narrative',
+            'DHW': 'dhw_narrative',
         }
-        for label, col in narrative_cols.items():
+        for label, col in narrative_cols_dbg.items():
             val = data.get(col)
             st.text(f"  {label}: {f'{len(val)} chars' if val else 'None'}")
 
@@ -695,6 +790,31 @@ if submitted:
         input_type, normalized = normalize_input(bbl_input)
         effective_bbl = None
 
+        # --- Clear stale session state from previous building ---
+        st.session_state.narratives = None
+        st.session_state.edited_narratives = {}
+        st.session_state.recalculated_penalties = None
+        st.session_state.edited_energy_inputs = {}
+
+        # Delete narrative widget keys so Streamlit uses fresh value= on next render
+        for _cat in NARRATIVE_CATEGORIES:
+            _wk = f"narrative_{_cat}"
+            if _wk in st.session_state:
+                del st.session_state[_wk]
+
+        # Delete penalty input widget keys (native-unit keys)
+        for _wk in ["penalty_elec_kwh", "penalty_gas_therms", "penalty_oil_gal",
+                     "penalty_steam_mlbs", "rate_elec", "rate_gas", "rate_steam", "rate_oil"]:
+            if _wk in st.session_state:
+                del st.session_state[_wk]
+
+        # Delete use-type sqft widget keys
+        from lib.storage import USE_TYPE_SQFT_COLUMNS as _UT_COLS_CLEAR
+        for _col in _UT_COLS_CLEAR:
+            _wk = f"ut_{_col}"
+            if _wk in st.session_state:
+                del st.session_state[_wk]
+
         if input_type == "dashed_bbl":
             st.info(f"Converted dashed BBL to: {normalized}")
             effective_bbl = normalized
@@ -832,6 +952,9 @@ if submitted:
 # Display results if data exists in session state
 if st.session_state.building_data:
     data = st.session_state.building_data
+
+    # Render debug sidebar (available from any tab, scrolls independently)
+    render_debug_sidebar(data)
 
     # Show data source indicators
     if st.session_state.data_source:

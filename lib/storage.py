@@ -478,6 +478,44 @@ def migrate_phase4_columns():
         conn.close()
 
 
+def migrate_phase4_native_units():
+    """
+    Add native-unit energy columns to building_metrics table.
+
+    Adds 3 new columns:
+    - natural_gas_therms (NUMERIC): Natural gas in therms (native unit)
+    - fuel_oil_gallons (NUMERIC): Fuel oil #2 in gallons (native unit)
+    - steam_mlbs (NUMERIC): District steam in Mlbs (native unit)
+
+    These store the same energy data as the existing kBtu columns but in the
+    native billing units that building operators use day-to-day.
+
+    This function is idempotent - safe to run multiple times.
+    """
+    conn = get_connection()
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    try:
+        native_columns = {
+            "natural_gas_therms": "NUMERIC",
+            "fuel_oil_gallons": "NUMERIC",
+            "steam_mlbs": "NUMERIC",
+        }
+
+        for col, col_type in native_columns.items():
+            cursor.execute(f"""
+                ALTER TABLE building_metrics
+                ADD COLUMN IF NOT EXISTS {col} {col_type};
+            """)
+
+        print("Migration complete: Added 3 native-unit energy columns")
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # Export list for external reference
 __all__ = [
     'create_building_metrics_table',
@@ -485,5 +523,6 @@ __all__ = [
     'get_building_metrics',
     'migrate_add_calculation_columns',
     'migrate_phase4_columns',
+    'migrate_phase4_native_units',
     'USE_TYPE_SQFT_COLUMNS'
 ]
