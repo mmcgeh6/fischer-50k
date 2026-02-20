@@ -79,6 +79,51 @@ if 'recalculated_penalties' not in st.session_state:
     st.session_state.recalculated_penalties = None
 
 
+def flush_all_session_caches():
+    """Nuke all building-specific caches and widget keys on new search.
+
+    Called immediately when the user clicks 'Retrieve Data' so the next
+    building starts with a completely clean slate — no stale narratives,
+    penalty edits, or widget values carried over from the previous run.
+    """
+    from lib.storage import USE_TYPE_SQFT_COLUMNS
+
+    # --- 1. Reset session-state dicts/values ---
+    st.session_state.building_data = None
+    st.session_state.narratives = None
+    st.session_state.edited_narratives = {}
+    st.session_state.recalculated_penalties = None
+    st.session_state.edited_energy_inputs = {}
+    st.session_state.current_bbl = None
+    st.session_state.data_source = None
+    st.session_state.last_processed = None
+
+    # --- 2. Delete narrative widget keys ---
+    for cat in NARRATIVE_CATEGORIES:
+        wk = f"narrative_{cat}"
+        if wk in st.session_state:
+            del st.session_state[wk]
+
+    # --- 3. Delete penalty / energy-input widget keys ---
+    for wk in [
+        "penalty_elec_kwh", "penalty_gas_therms", "penalty_oil_gal",
+        "penalty_steam_mlbs", "rate_elec", "rate_gas", "rate_steam", "rate_oil",
+        "recalc_penalties", "save_penalties",
+    ]:
+        if wk in st.session_state:
+            del st.session_state[wk]
+
+    # --- 4. Delete use-type sqft widget keys ---
+    for col in USE_TYPE_SQFT_COLUMNS:
+        wk = f"ut_{col}"
+        if wk in st.session_state:
+            del st.session_state[wk]
+
+    # --- 5. Delete narrative save button key ---
+    if "save_narratives" in st.session_state:
+        del st.session_state["save_narratives"]
+
+
 def format_currency(value) -> str:
     """Format number as currency string."""
     if value is None or value == 0:
@@ -790,30 +835,8 @@ if submitted:
         input_type, normalized = normalize_input(bbl_input)
         effective_bbl = None
 
-        # --- Clear stale session state from previous building ---
-        st.session_state.narratives = None
-        st.session_state.edited_narratives = {}
-        st.session_state.recalculated_penalties = None
-        st.session_state.edited_energy_inputs = {}
-
-        # Delete narrative widget keys so Streamlit uses fresh value= on next render
-        for _cat in NARRATIVE_CATEGORIES:
-            _wk = f"narrative_{_cat}"
-            if _wk in st.session_state:
-                del st.session_state[_wk]
-
-        # Delete penalty input widget keys (native-unit keys)
-        for _wk in ["penalty_elec_kwh", "penalty_gas_therms", "penalty_oil_gal",
-                     "penalty_steam_mlbs", "rate_elec", "rate_gas", "rate_steam", "rate_oil"]:
-            if _wk in st.session_state:
-                del st.session_state[_wk]
-
-        # Delete use-type sqft widget keys
-        from lib.storage import USE_TYPE_SQFT_COLUMNS as _UT_COLS_CLEAR
-        for _col in _UT_COLS_CLEAR:
-            _wk = f"ut_{_col}"
-            if _wk in st.session_state:
-                del st.session_state[_wk]
+        # Flush ALL building-specific caches before processing new entry
+        flush_all_session_caches()
 
         if input_type == "dashed_bbl":
             st.info(f"Converted dashed BBL to: {normalized}")
