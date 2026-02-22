@@ -343,11 +343,13 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
         data_sources.append('ll84_api')
 
         # Phase 4: Compute GFA calculated as sum of non-zero use-type sqft
+        # Exclude parking_sqft per ESPM convention (parking keeps its own
+        # emissions factor in calculations.py — penalty calc is unaffected)
         from lib.storage import USE_TYPE_SQFT_COLUMNS
         gfa_calc = sum(
             result.get(col) or 0
             for col in USE_TYPE_SQFT_COLUMNS
-            if (result.get(col) or 0) > 0
+            if (result.get(col) or 0) > 0 and col != "parking_sqft"
         )
         if gfa_calc > 0:
             result['gfa_calculated'] = gfa_calc

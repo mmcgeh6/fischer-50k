@@ -166,10 +166,20 @@ def display_building_info(data: dict):
 
     # Building characteristics
     st.subheader("Building Characteristics")
-    char_cols = st.columns(3)
+    char_cols = st.columns(4)
     char_cols[0].metric("Year Built", data.get('year_built', 'N/A'))
     char_cols[1].metric("Property Type", data.get('property_type', 'N/A'))
     char_cols[2].metric("Energy Star Score", data.get('energy_star_score', 'N/A'))
+    # Historic Building status from LL87 raw JSONB
+    ll87_raw = data.get('ll87_raw', {})
+    historic_val = ll87_raw.get('Historic Building? (Y/N)') if isinstance(ll87_raw, dict) else None
+    if historic_val is True:
+        historic_display = "Yes"
+    elif historic_val is False:
+        historic_display = "No"
+    else:
+        historic_display = "N/A"
+    char_cols[3].metric("Historic Building", historic_display)
 
     # GFA — Self Reported vs Calculated
     gfa_cols = st.columns(2)
@@ -255,6 +265,9 @@ def display_energy_data(data: dict):
     if data.get('ll87_raw'):
         st.write(f"**Audit Period:** {data.get('ll87_period', 'Unknown')}")
         st.write(f"**Audit ID:** {data.get('ll87_audit_id', 'Unknown')}")
+        ll87_raw = data.get('ll87_raw', {})
+        submission_date = ll87_raw.get('Submission Date') if isinstance(ll87_raw, dict) else None
+        st.write(f"**Last LL87 Submission:** {submission_date or 'Not available'}")
     else:
         st.info("No LL87 audit data available for this building (not in ll87_raw table)")
 
@@ -706,12 +719,16 @@ def display_database_record(data: dict):
 
     # Section 2: Building Characteristics
     with st.expander("Building Characteristics (Step 2: LL84/PLUTO)", expanded=True):
+        ll87_raw_chars = data.get('ll87_raw', {})
+        historic_val = ll87_raw_chars.get('Historic Building? (Y/N)') if isinstance(ll87_raw_chars, dict) else None
+        historic_display = "Yes" if historic_val is True else ("No" if historic_val is False else None)
         char_fields = {
             'Year Built': data.get('year_built'),
             'Property Type': data.get('property_type'),
             'GFA - Self Reported (sqft)': data.get('gfa_self_reported') or data.get('gfa'),
             'GFA - Calculated (sqft)': data.get('gfa_calculated'),
             'Energy Star Score': data.get('energy_star_score'),
+            'Historic Building': historic_display,
         }
         for label, value in char_fields.items():
             st.text(f"{label}: {value if value is not None else 'N/A'}")
@@ -749,9 +766,12 @@ def display_database_record(data: dict):
 
     # Section 5: LL87 Reference
     with st.expander("LL87 Audit Reference (Step 3)", expanded=True):
+        ll87_raw = data.get('ll87_raw', {})
+        submission_date = ll87_raw.get('Submission Date') if isinstance(ll87_raw, dict) else None
         ll87_fields = {
             'LL87 Audit ID': data.get('ll87_audit_id'),
             'LL87 Period': data.get('ll87_period'),
+            'Last LL87 Submission': submission_date,
         }
         for label, value in ll87_fields.items():
             st.text(f"{label}: {value if value is not None else 'N/A'}")

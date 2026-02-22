@@ -109,10 +109,12 @@ def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
             "wall construction", "wall insulation", "roof ", "window ",
             "glass type", "skylight", "foundation", "enclosure tightness",
             "framing material", "demising wall", "exposed above grade",
+            "general building shape", "green roof",
         ],
         "Heating System": [
             "heating plant", "heating system", "space heating",
             "boiler", "heat exchanger",
+            "shw sys", "shw system", "shw ",
         ],
         "Cooling System": [
             "cooling plant", "cooling system", "chiller", "condenser",
@@ -162,6 +164,7 @@ def _extract_all_equipment_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
         "Heating Equipment Specs": [
             "heating plant", "heating system", "space heating",
             "boiler", "heat exchanger", "hot water pump", "zone equip",
+            "shw sys", "shw system", "shw ",
         ],
         "Cooling Equipment Specs": [
             "cooling plant", "cooling system", "chiller", "condenser",
@@ -180,6 +183,7 @@ def _extract_all_equipment_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
             "wall construction", "wall insulation", "roof ", "window ",
             "glass type", "skylight", "foundation", "enclosure tightness",
             "framing material", "demising wall", "exposed above grade",
+            "general building shape", "green roof",
         ],
         "Domestic Hot Water": [
             "shw sys", "shw system", "hot water", "service water heating",
@@ -292,7 +296,7 @@ BUILDING CONTEXT:
 BUILDING AUTOMATION SYSTEM:
 {all_equipment.get('Building Automation System', 'Not documented')}
 
-HEATING EQUIPMENT SPECS (Boilers, Heat Exchangers, Hot Water Pumps, Zone Equip):
+HEATING EQUIPMENT SPECS (Boilers, Heat Exchangers, Hot Water Pumps, Zone Equip, Service Hot Water):
 {all_equipment.get('Heating Equipment Specs', 'Not documented')}
 
 COOLING EQUIPMENT SPECS (Chillers, Chilled Water Pumps, Cooling Towers, Condenser Water Pumps, Heat Exchangers):
