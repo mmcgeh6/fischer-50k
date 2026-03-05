@@ -124,6 +124,15 @@ def flush_all_session_caches():
     if "save_narratives" in st.session_state:
         del st.session_state["save_narratives"]
 
+    # --- 6. Delete manual building detail widget keys ---
+    for wk in [
+        "manual_floors_above", "manual_floors_below",
+        "manual_floors_rooftop", "manual_elevators",
+        "save_building_details",
+    ]:
+        if wk in st.session_state:
+            del st.session_state[wk]
+
 
 def format_currency(value) -> str:
     """Format number as currency string."""
@@ -189,12 +198,16 @@ def display_building_info(data: dict):
     gfa_cols[0].metric("GFA — Self Reported", format_number(gfa_sr, " sqft"))
     gfa_cols[1].metric("GFA — Calculated", format_number(gfa_calc, " sqft"))
 
-    # Additional building characteristics (from PLUTO enrichment / web search)
+    # Additional building characteristics (from PLUTO enrichment / Socrata APIs / web search)
     extra_fields = {}
     if data.get('building_owner'):
         extra_fields['Building Owner'] = data['building_owner']
     if data.get('num_floors'):
         extra_fields['Number of Floors'] = str(data['num_floors'])
+    if data.get('building_height'):
+        extra_fields['Building Height'] = f"{data['building_height']} ft"
+    if data.get('building_class'):
+        extra_fields['Building Class'] = data['building_class']
     if data.get('floors_above_grade') or data.get('floors_below_grade'):
         above = data.get('floors_above_grade', 'N/A')
         below = data.get('floors_below_grade', 'N/A')
@@ -210,6 +223,63 @@ def display_building_info(data: dict):
         extra_cols = st.columns(min(len(extra_fields), 4))
         for i, (label, value) in enumerate(extra_fields.items()):
             extra_cols[i % len(extra_cols)].metric(label, value)
+
+    # Landmark detail (can be long — display as caption below metrics)
+    if data.get('landmark_detail'):
+        st.caption(f"Landmark Detail: {data['landmark_detail']}")
+
+    # --- Manual input section for fields APIs can't provide ---
+    st.markdown("---")
+    st.subheader("Manual Building Details")
+    st.caption("Enter values that APIs cannot provide. These are saved to the database.")
+
+    manual_cols = st.columns(4)
+    manual_above = manual_cols[0].number_input(
+        "Floors Above Grade", min_value=0, step=1,
+        value=data.get('floors_above_grade') or 0,
+        key="manual_floors_above",
+    )
+    manual_below = manual_cols[1].number_input(
+        "Floors Below Grade", min_value=0, step=1,
+        value=data.get('floors_below_grade') or 0,
+        key="manual_floors_below",
+    )
+    manual_rooftop = manual_cols[2].number_input(
+        "Rooftop/Penthouse Floors", min_value=0, step=1,
+        value=data.get('floors_rooftop_penthouse') or 0,
+        key="manual_floors_rooftop",
+    )
+    manual_elevators = manual_cols[3].number_input(
+        "Number of Elevators", min_value=0, step=1,
+        value=data.get('num_elevators') or 0,
+        key="manual_elevators",
+    )
+
+    if st.button("Save Building Details", key="save_building_details"):
+        from lib.storage import upsert_building_metrics
+        bbl_val = data.get('bbl')
+        if bbl_val:
+            save_data = {'bbl': bbl_val}
+            if manual_above > 0:
+                save_data['floors_above_grade'] = int(manual_above)
+            if manual_below > 0:
+                save_data['floors_below_grade'] = int(manual_below)
+            if manual_rooftop > 0:
+                save_data['floors_rooftop_penthouse'] = int(manual_rooftop)
+            if manual_elevators > 0:
+                save_data['num_elevators'] = int(manual_elevators)
+            if len(save_data) > 1:  # more than just 'bbl'
+                try:
+                    upsert_building_metrics(save_data)
+                    st.success("Building details saved.")
+                    # Update in-memory data so display refreshes
+                    data.update(save_data)
+                except Exception as e:
+                    st.error(f"Failed to save: {e}")
+            else:
+                st.info("No values to save (all zero).")
+        else:
+            st.warning("No BBL in current data — cannot save.")
 
     # Non-zero use types with square footage
     st.subheader("Use Types")
@@ -745,15 +815,26 @@ def render_debug_sidebar(data: dict):
         else:
             st.info("No web search data (Step 6 may have been skipped or all fields were already populated)")
 
-        # Show web-search-sourced fields
+        # Show tier source mapping
+        tier_sources = data.get('_tier_sources')
+        if tier_sources and isinstance(tier_sources, dict):
+            st.markdown("#### Data Source Tiers")
+            for src, tier_label in tier_sources.items():
+                st.text(f"  {tier_label}")
+
+        # Show all enrichment fields
         ws_fields = {
             'Building Owner': data.get('building_owner'),
             'Num Floors': data.get('num_floors'),
+            'Building Height': data.get('building_height'),
+            'Building Class': data.get('building_class'),
             'Floors Above Grade': data.get('floors_above_grade'),
             'Floors Below Grade': data.get('floors_below_grade'),
+            'Floors Rooftop/Penthouse': data.get('floors_rooftop_penthouse'),
             'Num Residential Units': data.get('num_residential_units'),
             'Num Elevators': data.get('num_elevators'),
             'Landmark Status': data.get('landmark_status'),
+            'Landmark Detail': data.get('landmark_detail'),
             'DOF Address': data.get('dof_address'),
         }
         populated = {k: v for k, v in ws_fields.items() if v is not None}
@@ -763,6 +844,17 @@ def render_debug_sidebar(data: dict):
                 st.text(f"  {label}: {value}")
         else:
             st.text("  (no enrichment fields populated)")
+
+        # Show raw API responses from new Socrata APIs
+        dob_raw = data.get('_dob_filings_api_raw')
+        if dob_raw:
+            st.markdown("#### DOB Job Filings Raw")
+            st.json(dob_raw)
+
+        lpc_raw = data.get('_lpc_landmarks_api_raw')
+        if lpc_raw:
+            st.markdown("#### LPC Landmarks Raw")
+            st.json(lpc_raw)
 
 
 def display_database_record(data: dict):
@@ -889,16 +981,20 @@ def display_database_record(data: dict):
                 st.text("  (not generated)")
             st.divider()
 
-    # Section 8: Web Search Enrichment (Step 6)
-    with st.expander("Web Search Enrichment (Step 6)", expanded=True):
+    # Section 8: Building Enrichment (Step 6)
+    with st.expander("Building Enrichment (Step 6)", expanded=True):
         ws_fields_db = {
             'Building Owner': data.get('building_owner'),
             'Number of Floors': data.get('num_floors'),
+            'Building Height (ft)': data.get('building_height'),
+            'Building Class': data.get('building_class'),
             'Floors Above Grade': data.get('floors_above_grade'),
             'Floors Below Grade': data.get('floors_below_grade'),
+            'Rooftop/Penthouse Floors': data.get('floors_rooftop_penthouse'),
             'Residential Units': data.get('num_residential_units'),
             'Elevators': data.get('num_elevators'),
             'Landmark Status': data.get('landmark_status'),
+            'Landmark Detail': data.get('landmark_detail'),
             'DOF Address': data.get('dof_address'),
         }
         for label, value in ws_fields_db.items():

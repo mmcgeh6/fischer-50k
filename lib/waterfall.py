@@ -539,7 +539,7 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                 f"— running web search fallback"
             )
 
-            # Check API key availability to determine which layers to use
+            # Check API key availability to determine which tiers to use
             has_firecrawl = bool(
                 os.environ.get("FIRECRAWL_API_KEY")
                 or _get_secret("FIRECRAWL_API_KEY")
@@ -555,6 +555,21 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                 skip_firecrawl=not has_firecrawl,
                 skip_claude_search=not has_anthropic,
             )
+
+            # Tag each source with its tier for debug display
+            tier_map = {
+                'pluto_enriched': 'Tier 0 (PLUTO)',
+                'dob_job_filings': 'Tier 1 (DOB Filings)',
+                'lpc_landmarks': 'Tier 1 (LPC Landmarks)',
+                'landmarks_gis': 'Tier 2 (Landmarks GIS)',
+                'dob_bis': 'Tier 3 (DOB BIS)',
+                'dof': 'Tier 3 (DOF)',
+                'zola_gis': 'Tier 3 (ZoLa)',
+                'claude_web_search': 'Tier 4 (Claude)',
+            }
+            result['_tier_sources'] = {
+                src: tier_map.get(src, src) for src in new_sources
+            }
 
             # Merge new fields into result (never overwrites existing data)
             for key, value in new_fields.items():

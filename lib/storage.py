@@ -518,16 +518,20 @@ def migrate_phase4_native_units():
 
 def migrate_web_search_columns():
     """
-    Add web search fallback columns to building_metrics table.
+    Add enrichment columns to building_metrics table.
 
-    Adds 9 new columns for data sourced from web search (Step 6):
-    - building_owner (TEXT): Property owner from PLUTO/DOF/web search
-    - num_floors (INTEGER): Total floors from PLUTO/DOB BIS/ZoLa
+    Adds 13 columns for data sourced from APIs and web search (Step 6):
+    - building_owner (TEXT): Property owner from PLUTO/DOB Filings/web search
+    - num_floors (INTEGER): Total floors from PLUTO/DOB Filings/DOB BIS
     - floors_above_grade (INTEGER): Floors above ground from DOB BIS/web
     - floors_below_grade (INTEGER): Basement/cellar levels from DOB BIS/web
-    - num_residential_units (INTEGER): Residential units from PLUTO/ZoLa
+    - floors_rooftop_penthouse (INTEGER): Rooftop/penthouse floors (manual input)
+    - num_residential_units (INTEGER): Residential units from PLUTO/LL84
     - num_elevators (INTEGER): Elevator count from DOB BIS/web
-    - landmark_status (TEXT): Landmark designation from Landmarks GIS/PLUTO
+    - landmark_status (TEXT): Landmark designation from LPC Socrata/Landmarks GIS/PLUTO
+    - landmark_detail (TEXT): Architect, style, materials from LPC Socrata
+    - building_height (NUMERIC): Building height in feet from DOB Filings
+    - building_class (VARCHAR(10)): Building class code from PLUTO/DOB Filings
     - dof_address (TEXT): DOF tax records address (may differ from LL97)
     - web_search_metadata (JSONB): Audit trail of source URLs and timestamps
 
@@ -543,9 +547,13 @@ def migrate_web_search_columns():
             "num_floors": "INTEGER",
             "floors_above_grade": "INTEGER",
             "floors_below_grade": "INTEGER",
+            "floors_rooftop_penthouse": "INTEGER",
             "num_residential_units": "INTEGER",
             "num_elevators": "INTEGER",
             "landmark_status": "TEXT",
+            "landmark_detail": "TEXT",
+            "building_height": "NUMERIC",
+            "building_class": "VARCHAR(10)",
             "dof_address": "TEXT",
             "web_search_metadata": "JSONB",
         }
@@ -556,7 +564,7 @@ def migrate_web_search_columns():
                 ADD COLUMN IF NOT EXISTS {col} {col_type};
             """)
 
-        print("Migration complete: Added 9 web search columns")
+        print("Migration complete: Added 13 enrichment columns")
 
     finally:
         cursor.close()

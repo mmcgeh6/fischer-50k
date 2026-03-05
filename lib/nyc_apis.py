@@ -1,8 +1,8 @@
 """
-NYC Open Data API clients for GeoSearch, LL84, and PLUTO.
+NYC Open Data API clients for GeoSearch, LL84, PLUTO, DOB Job Filings, and LPC Landmarks.
 
 Provides robust API clients with retry logic, field mapping, and error handling
-for the three external APIs used in the waterfall pipeline.
+for the external APIs used in the waterfall pipeline.
 """
 
 import logging
@@ -465,6 +465,7 @@ def call_pluto_api(
             "address": raw_data.get("address"),  # CRITICAL: for GeoSearch fallback chain
             "zip_code": raw_data.get("zipcode"),
             "num_residential_units": _safe_int(raw_data.get("unitsres")),
+            "building_class": raw_data.get("bldgclass"),
         }
 
         mapped_data['_pluto_api_raw'] = raw_data
@@ -473,6 +474,232 @@ def call_pluto_api(
 
     except Exception as e:
         logger.error(f"PLUTO API error for BBL {bbl}: {e}")
+        return None
+
+    finally:
+        if client:
+            client.close()
+
+
+# ============================================================================
+# DOB Job Application Filings API (Tier 1a — free Socrata)
+# ============================================================================
+
+# DOB Job Filings uses borough NAME strings, not numeric codes
+_BOROUGH_NAME_MAP = {
+    "1": "MANHATTAN", "2": "BRONX", "3": "BROOKLYN",
+    "4": "QUEENS", "5": "STATEN ISLAND",
+}
+
+
+def call_dob_job_filings_api(
+    bbl: str,
+    app_token: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Call DOB Job Application Filings API by BBL parts (borough + block + lot).
+
+    Dataset: ic3t-wcy2  (DOB Job Application Filings)
+    Free Socrata API — no scraping needed.
+
+    Args:
+        bbl: 10-digit BBL (no dashes)
+        app_token: NYC Open Data app token (optional)
+
+    Returns:
+        Dict with keys: num_floors, num_residential_units, building_owner,
+                        building_height, building_class, landmark_flag,
+                        _dob_filings_api_raw
+        Returns None if no results
+    """
+    if not validate_bbl(bbl):
+        logger.error(f"DOB Filings: Invalid BBL format: {bbl}")
+        return None
+
+    if app_token is None:
+        app_token = _get_app_token()
+
+    # Split BBL into borough name, block (5-digit), lot (5-digit)
+    boro_code = bbl[0]
+    block = bbl[1:6]       # Keep leading zeros — dataset uses zero-padded
+    lot = bbl[6:].zfill(5) # BBL lot is 4 digits but DOB dataset uses 5-digit lots
+    borough_name = _BOROUGH_NAME_MAP.get(boro_code)
+    if not borough_name:
+        logger.error(f"DOB Filings: Unknown borough code: {boro_code}")
+        return None
+
+    client = None
+    try:
+        client = Socrata(
+            "data.cityofnewyork.us",
+            app_token,
+            timeout=30
+        )
+
+        # Query most recent filing with building data
+        # DOB dataset block/lot may or may not have leading zeros —
+        # cast to numeric for safe comparison
+        results = client.get(
+            "ic3t-wcy2",
+            where=(
+                f"borough='{borough_name}' AND "
+                f"block='{block}' AND lot='{lot}'"
+            ),
+            order="latest_action_date DESC",
+            limit=10  # Get several — pick the one with most data
+        )
+
+        if not results:
+            logger.info(f"DOB Filings: No data found for BBL {bbl}")
+            return None
+
+        # Pick the best record — some filings have 0 stories / sparse data.
+        # Score each record by how many useful fields it has.
+        def _score(rec):
+            s = 0
+            if _safe_int(rec.get("existingno_of_stories")):
+                s += 2
+            if _safe_int(rec.get("existing_dwelling_units")):
+                s += 1
+            if _safe_float(rec.get("existing_height")):
+                s += 1
+            if (rec.get("owner_s_business_name") or "").strip():
+                s += 1
+            return s
+
+        raw_data = max(results, key=_score)
+
+        # Build owner name: prefer business name, fallback to first+last
+        _skip_values = {"", "N/A", "NA", "0", "NONE"}
+        owner = None
+        biz_name = (raw_data.get("owner_s_business_name") or "").strip()
+        if biz_name and biz_name.upper() not in _skip_values:
+            owner = biz_name
+        else:
+            first = (raw_data.get("owner_s_first_name") or "").strip()
+            last = (raw_data.get("owner_s_last_name") or "").strip()
+            if first or last:
+                name = f"{first} {last}".strip()
+                if name.upper() not in _skip_values:
+                    owner = name
+
+        mapped_data = {
+            "num_floors": _safe_int(raw_data.get("existingno_of_stories")),
+            "num_residential_units": _safe_int(raw_data.get("existing_dwelling_units")),
+            "building_owner": owner if owner else None,
+            "building_height": _safe_float(raw_data.get("existing_height")),
+            "building_class": raw_data.get("building_class"),
+            "landmark_flag": (raw_data.get("landmarked") or "").upper() == "Y",
+            "_dob_filings_api_raw": raw_data,
+        }
+
+        logger.info(f"DOB Filings: Retrieved data for BBL {bbl} "
+                     f"(best of {len(results)} records)")
+        return mapped_data
+
+    except Exception as e:
+        logger.error(f"DOB Filings API error for BBL {bbl}: {e}")
+        return None
+
+    finally:
+        if client:
+            client.close()
+
+
+# ============================================================================
+# LPC Landmarks Socrata API (Tier 1b — free Socrata)
+# ============================================================================
+
+def call_lpc_landmarks_api(
+    bbl: str,
+    app_token: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Call LPC Individual Landmarks & Historic District Properties API by BBL.
+
+    Dataset: gpmc-yuvp  (LPC Individual Landmark and Historic District Building Database)
+    Free Socrata API — no scraping needed.
+
+    Args:
+        bbl: 10-digit BBL (no dashes)
+        app_token: NYC Open Data app token (optional)
+
+    Returns:
+        Dict with keys: landmark_status, landmark_detail, _lpc_landmarks_api_raw
+        Returns None if BBL has no landmark designation (not an error — just not landmarked)
+    """
+    if not validate_bbl(bbl):
+        logger.error(f"LPC Landmarks: Invalid BBL format: {bbl}")
+        return None
+
+    if app_token is None:
+        app_token = _get_app_token()
+
+    client = None
+    try:
+        client = Socrata(
+            "data.cityofnewyork.us",
+            app_token,
+            timeout=30
+        )
+
+        results = client.get(
+            "gpmc-yuvp",
+            where=f"bbl='{bbl}'",
+            limit=5
+        )
+
+        if not results:
+            logger.info(f"LPC Landmarks: BBL {bbl} not in landmarks database")
+            return None
+
+        raw_data = results[0]
+
+        # Build landmark status
+        hist_dist = (raw_data.get("hist_dist") or "").strip()
+        if hist_dist:
+            status = f"Historic District: {hist_dist}"
+        else:
+            status = "Individual Landmark"
+
+        # Build landmark detail string
+        detail_parts = []
+        arch = (raw_data.get("arch_build") or "").strip()
+        if arch:
+            detail_parts.append(f"Architect: {arch}")
+
+        style = (raw_data.get("style_prim") or "").strip()
+        if style:
+            detail_parts.append(f"Style: {style}")
+
+        material = (raw_data.get("mat_prim") or "").strip()
+        if material:
+            detail_parts.append(f"Material: {material}")
+
+        date_low = raw_data.get("date_low")
+        date_high = raw_data.get("date_high")
+        if date_low and date_high and date_low != date_high:
+            detail_parts.append(f"Built: {date_low}-{date_high}")
+        elif date_low:
+            detail_parts.append(f"Built: {date_low}")
+
+        build_type = (raw_data.get("build_type") or "").strip()
+        if build_type:
+            detail_parts.append(f"Type: {build_type}")
+
+        landmark_detail = "; ".join(detail_parts) if detail_parts else None
+
+        mapped_data = {
+            "landmark_status": status,
+            "landmark_detail": landmark_detail,
+            "_lpc_landmarks_api_raw": raw_data,
+        }
+
+        logger.info(f"LPC Landmarks: BBL {bbl} → {status}")
+        return mapped_data
+
+    except Exception as e:
+        logger.error(f"LPC Landmarks API error for BBL {bbl}: {e}")
         return None
 
     finally:

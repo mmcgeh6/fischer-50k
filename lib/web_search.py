@@ -2,11 +2,16 @@
 Web search fallback for building data (Waterfall Step 6).
 
 When primary APIs (LL84, LL87, LL97, PLUTO) return incomplete data,
-this module fills gaps using three layers:
+this module fills gaps using a 5-tier cascade:
 
-  Layer 1: PLUTO Enrichment — extract fields already in _pluto_api_raw (free)
-  Layer 2: Firecrawl Scrapers — targeted government site scraping (DOF, DOB BIS, ZoLa, Landmarks GIS)
-  Layer 3: Claude Web Search — general web research (replaces manual Gemini gem workflow)
+  Tier 0: PLUTO Enrichment — extract fields already in _pluto_api_raw (FREE)
+  Tier 1: Free Socrata APIs — DOB Job Filings + LPC Landmarks (FREE)
+  Tier 2: Landmarks GIS REST — ArcGIS LPC designations (FREE)
+  Tier 3: Firecrawl Scrapers — DOB BIS, DOF, ZoLa web scraping ($$)
+  Tier 4: Claude Web Search — general web research ($$)
+
+Tiers 0-2 are free and cover ~80% of target fields at 50K scale.
+Tiers 3-4 are only triggered when free tiers leave gaps.
 
 Merge rule: NEVER overwrite data from primary sources (Steps 1-5).
 """
@@ -39,10 +44,13 @@ CRITICAL_FIELDS = {
 # Enrichment: additional fields worth searching for
 ENRICHMENT_FIELDS = {
     'landmark_status',
+    'landmark_detail',
     'num_residential_units',
     'num_elevators',
     'floors_above_grade',
     'floors_below_grade',
+    'building_height',
+    'building_class',
     'dof_address',
 }
 
@@ -140,6 +148,11 @@ def extract_pluto_enrichment(pluto_raw: Optional[Dict]) -> Dict[str, Any]:
     if val and val > 0:
         result['num_residential_units'] = val
 
+    # Building class from PLUTO
+    bldg_class = pluto_raw.get('bldgclass')
+    if bldg_class and str(bldg_class).strip():
+        result['building_class'] = str(bldg_class).strip()
+
     # Landmark from PLUTO histdist or landmark fields
     hist_dist = pluto_raw.get('histdist')
     if hist_dist and str(hist_dist).strip():
@@ -149,7 +162,80 @@ def extract_pluto_enrichment(pluto_raw: Optional[Dict]) -> Dict[str, Any]:
 
 
 # ============================================================================
-# Layer 2: Firecrawl Scrapers (government websites)
+# Tier 1: Free Socrata APIs (DOB Job Filings + LPC Landmarks)
+# ============================================================================
+
+def run_tier1_socrata_apis(
+    bbl: str,
+    missing_fields: List[str],
+    original_result: Dict[str, Any],
+    accumulator: Dict[str, Any],
+) -> List[str]:
+    """
+    Call free NYC Socrata APIs for fields that PLUTO didn't provide.
+
+    Calls:
+    - DOB Job Filings (ic3t-wcy2): num_floors, num_residential_units,
+      building_owner, building_height, building_class, landmark_flag
+    - LPC Landmarks (gpmc-yuvp): landmark_status, landmark_detail
+
+    Returns list of data sources used.
+    """
+    from lib.nyc_apis import call_dob_job_filings_api, call_lpc_landmarks_api
+
+    sources: List[str] = []
+
+    # --- LPC Landmarks (run FIRST — more descriptive landmark_status) ---
+    lpc_target_fields = {'landmark_status', 'landmark_detail'}
+    if lpc_target_fields & set(missing_fields):
+        try:
+            lpc_data = call_lpc_landmarks_api(bbl)
+            if lpc_data:
+                _merge_missing(accumulator, original_result, lpc_data)
+                non_meta = {k: v for k, v in lpc_data.items()
+                            if not k.startswith('_') and v is not None}
+                if non_meta:
+                    sources.append('lpc_landmarks')
+                    logger.info(f"Tier 1a LPC Landmarks: found {list(non_meta.keys())}")
+        except Exception as e:
+            logger.warning(f"Tier 1a LPC Landmarks failed for BBL {bbl}: {e}")
+
+    # --- DOB Job Filings ---
+    dob_target_fields = {
+        'num_floors', 'num_residential_units', 'building_owner',
+        'building_height', 'building_class',
+    }
+    if dob_target_fields & set(missing_fields):
+        try:
+            dob_data = call_dob_job_filings_api(bbl)
+            if dob_data:
+                # The landmark_flag from DOB is a boolean; promote to status text
+                # only if LPC didn't already set a richer value
+                lm_flag = dob_data.pop('landmark_flag', None)
+                if lm_flag and 'landmark_status' in missing_fields:
+                    if not original_result.get('landmark_status') \
+                            and not accumulator.get('landmark_status'):
+                        accumulator['landmark_status'] = 'Landmarked (per DOB filing)'
+
+                _merge_missing(accumulator, original_result, dob_data)
+                non_meta = {k: v for k, v in dob_data.items()
+                            if not k.startswith('_') and v is not None}
+                if non_meta:
+                    sources.append('dob_job_filings')
+                    logger.info(f"Tier 1b DOB Filings: found {list(non_meta.keys())}")
+        except Exception as e:
+            logger.warning(f"Tier 1b DOB Job Filings failed for BBL {bbl}: {e}")
+
+    return sources
+
+
+# ============================================================================
+# Tier 2: Landmarks GIS REST API (FREE)
+# ============================================================================
+
+
+# ============================================================================
+# Tier 3: Firecrawl Scrapers (government websites — $$)
 # ============================================================================
 
 def _get_firecrawl_client():
@@ -399,7 +485,7 @@ def scrape_zola_gis(bbl: str) -> Dict[str, Any]:
 
 
 # ============================================================================
-# Layer 3: Claude Web Search (Gemini gem replacement)
+# Tier 4: Claude Web Search (Gemini gem replacement — $$)
 # ============================================================================
 
 @backoff.on_exception(backoff.expo, Exception, max_tries=2, max_time=60,
@@ -587,9 +673,10 @@ def _clean_search_results(
 
     int_fields = {'year_built', 'num_floors', 'floors_above_grade',
                   'floors_below_grade', 'num_elevators', 'num_residential_units'}
-    float_fields = {'gfa'}
+    float_fields = {'gfa', 'building_height'}
     str_fields = {'building_name', 'building_owner', 'property_type',
-                  'landmark_status', 'dof_address'}
+                  'landmark_status', 'landmark_detail', 'building_class',
+                  'dof_address'}
 
     for key, value in raw_data.items():
         if key not in ALL_TARGET_FIELDS and key not in {'building_name'}:
@@ -624,18 +711,19 @@ def run_web_search_fallback(
     result: Dict[str, Any],
     skip_firecrawl: bool = False,
     skip_claude_search: bool = False,
+    bulk_mode: bool = False,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """
-    Execute web search fallback pipeline (Step 6).
+    Execute 5-tier enrichment pipeline (Step 6).
 
-    Sequence:
-    1. Extract PLUTO enrichment (free, instant)
-    2. Determine which fields are still missing
-    3. Run Firecrawl scrapers for specific government sites
-    4. Determine remaining gaps
-    5. Run Claude web search for anything still missing
-    6. Return merged results + new data sources
+    Tier cascade:
+      Tier 0: PLUTO Enrichment (free, instant — data already in memory)
+      Tier 1: Free Socrata APIs — DOB Job Filings + LPC Landmarks (free)
+      Tier 2: Landmarks GIS REST — ArcGIS LPC designations (free)
+      Tier 3: Firecrawl Scrapers — DOB BIS, DOF, ZoLa web scraping ($$)
+      Tier 4: Claude Web Search — general web research ($$)
 
+    When bulk_mode=True, only Tiers 0-2 run (all free, $0 cost).
     Never overwrites data from primary API sources (Steps 1-5).
 
     Returns:
@@ -646,8 +734,12 @@ def run_web_search_fallback(
     address = result.get('address', '')
     bin_number = result.get('bin')
 
+    def _still_missing() -> List[str]:
+        return [f for f in ALL_TARGET_FIELDS
+                if not result.get(f) and not new_fields.get(f)]
+
     # ------------------------------------------------------------------
-    # Phase A: PLUTO Enrichment (always runs, free)
+    # Tier 0: PLUTO Enrichment (always runs, free)
     # ------------------------------------------------------------------
     pluto_raw = result.get('_pluto_api_raw')
     if pluto_raw:
@@ -655,39 +747,62 @@ def run_web_search_fallback(
         if pluto_extras:
             _merge_missing(new_fields, result, pluto_extras)
             new_sources.append('pluto_enriched')
-            logger.info(f"Step 6A: PLUTO enrichment found "
+            logger.info(f"Tier 0 PLUTO enrichment: found "
                         f"{len(pluto_extras)} fields: {list(pluto_extras.keys())}")
-
-    # ------------------------------------------------------------------
-    # Phase B: Check which fields are still missing
-    # ------------------------------------------------------------------
-    def _still_missing() -> List[str]:
-        return [f for f in ALL_TARGET_FIELDS
-                if not result.get(f) and not new_fields.get(f)]
 
     missing = _still_missing()
     if not missing:
-        logger.info("Step 6: All target fields populated, skipping web search")
+        logger.info("Step 6: All target fields populated after Tier 0")
         return new_fields, new_sources
 
-    logger.info(f"Step 6B: {len(missing)} fields still missing: {missing}")
+    logger.info(f"After Tier 0: {len(missing)} fields still missing: {missing}")
 
     # ------------------------------------------------------------------
-    # Phase C: Firecrawl scrapers (targeted government sites)
+    # Tier 1: Free Socrata APIs (DOB Job Filings + LPC Landmarks)
+    # ------------------------------------------------------------------
+    tier1_sources = run_tier1_socrata_apis(bbl, missing, result, new_fields)
+    new_sources.extend(tier1_sources)
+
+    missing = _still_missing()
+    if not missing:
+        logger.info("Step 6: All target fields populated after Tier 1")
+        return new_fields, new_sources
+
+    logger.info(f"After Tier 1: {len(missing)} fields still missing: {missing}")
+
+    # ------------------------------------------------------------------
+    # Tier 2: Landmarks GIS REST (free ArcGIS endpoint)
+    # ------------------------------------------------------------------
+    if 'landmark_status' in missing:
+        try:
+            landmarks_data = scrape_landmarks_gis(bbl)
+            if landmarks_data:
+                _merge_missing(new_fields, result, landmarks_data)
+                new_sources.append('landmarks_gis')
+        except Exception as e:
+            logger.warning(f"Tier 2 Landmarks GIS failed: {e}")
+
+    missing = _still_missing()
+    if not missing:
+        logger.info("Step 6: All target fields populated after Tier 2")
+        return new_fields, new_sources
+
+    # --- Bulk mode stops here (Tiers 0-2 only, all free) ---
+    if bulk_mode:
+        final_found = {k: v for k, v in new_fields.items()
+                       if not k.startswith('_')}
+        logger.info(f"Step 6 bulk mode: found {len(final_found)} fields "
+                    f"from free tiers (0-2), sources: {new_sources}")
+        return new_fields, new_sources
+
+    logger.info(f"After Tier 2: {len(missing)} fields still missing: {missing}")
+
+    # ------------------------------------------------------------------
+    # Tier 3: Firecrawl scrapers (targeted government sites — $$)
     # ------------------------------------------------------------------
     if not skip_firecrawl:
 
-        # C1: Landmarks GIS (REST API, no Firecrawl needed, free)
-        if 'landmark_status' in missing:
-            try:
-                landmarks_data = scrape_landmarks_gis(bbl)
-                if landmarks_data:
-                    _merge_missing(new_fields, result, landmarks_data)
-                    new_sources.append('landmarks_gis')
-            except Exception as e:
-                logger.warning(f"Step 6C1: Landmarks GIS failed: {e}")
-
-        # C2: DOB BIS (floors, elevators)
+        # 3a: DOB BIS (floors breakdown, elevators)
         dob_fields = {'num_floors', 'floors_above_grade', 'floors_below_grade',
                       'num_elevators'}
         if dob_fields & set(missing):
@@ -697,10 +812,11 @@ def run_web_search_fallback(
                     _merge_missing(new_fields, result, dob_data)
                     new_sources.append('dob_bis')
             except Exception as e:
-                logger.warning(f"Step 6C2: DOB BIS scrape failed: {e}")
+                logger.warning(f"Tier 3a DOB BIS scrape failed: {e}")
 
-        # C3: DOF (owner, address)
+        # 3b: DOF (owner, address — only if PLUTO + DOB Filings missed)
         dof_fields = {'building_owner', 'dof_address'}
+        missing = _still_missing()
         if dof_fields & set(missing):
             try:
                 dof_data = scrape_dof_by_bbl(bbl)
@@ -708,9 +824,10 @@ def run_web_search_fallback(
                     _merge_missing(new_fields, result, dof_data)
                     new_sources.append('dof')
             except Exception as e:
-                logger.warning(f"Step 6C3: DOF scrape failed: {e}")
+                logger.warning(f"Tier 3b DOF scrape failed: {e}")
 
-        # C4: ZoLa GIS (year_built, floors, use type, units)
+        # 3c: ZoLa GIS (year_built, floors, use type, units — broad fallback)
+        missing = _still_missing()
         zola_fields = {'year_built', 'num_floors', 'property_type',
                        'num_residential_units'}
         if zola_fields & set(missing):
@@ -720,19 +837,15 @@ def run_web_search_fallback(
                     _merge_missing(new_fields, result, zola_data)
                     new_sources.append('zola_gis')
             except Exception as e:
-                logger.warning(f"Step 6C4: ZoLa GIS scrape failed: {e}")
+                logger.warning(f"Tier 3c ZoLa GIS scrape failed: {e}")
 
     # ------------------------------------------------------------------
-    # Phase D: Recalculate remaining gaps after Firecrawl
+    # Tier 4: Claude Web Search (general research for remaining gaps — $$)
     # ------------------------------------------------------------------
     still_missing = _still_missing()
-
-    # ------------------------------------------------------------------
-    # Phase E: Claude Web Search (general research for remaining gaps)
-    # ------------------------------------------------------------------
     if still_missing and not skip_claude_search:
-        logger.info(f"Step 6E: {len(still_missing)} fields still missing after "
-                    f"Firecrawl, running Claude web search: {still_missing}")
+        logger.info(f"Tier 4: {len(still_missing)} fields still missing after "
+                    f"Tiers 0-3, running Claude web search: {still_missing}")
         try:
             merged_known = {**result, **new_fields}
             claude_data = claude_building_research(
@@ -742,7 +855,7 @@ def run_web_search_fallback(
                 _merge_missing(new_fields, result, claude_data)
                 new_sources.append('claude_web_search')
         except Exception as e:
-            logger.warning(f"Step 6E: Claude web search failed: {e}")
+            logger.warning(f"Tier 4 Claude web search failed: {e}")
 
     final_found = {k: v for k, v in new_fields.items() if not k.startswith('_')}
     logger.info(f"Step 6 complete: found {len(final_found)} new fields "
