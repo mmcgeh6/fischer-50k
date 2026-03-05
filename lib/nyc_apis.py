@@ -463,7 +463,8 @@ def call_pluto_api(
             "gfa": _safe_float(raw_data.get("bldgarea")),
             "owner_name": raw_data.get("ownername"),
             "address": raw_data.get("address"),  # CRITICAL: for GeoSearch fallback chain
-            "zip_code": raw_data.get("zipcode")
+            "zip_code": raw_data.get("zipcode"),
+            "num_residential_units": _safe_int(raw_data.get("unitsres")),
         }
 
         mapped_data['_pluto_api_raw'] = raw_data

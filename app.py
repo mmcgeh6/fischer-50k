@@ -51,9 +51,10 @@ if not check_password():
 if 'migration_done' not in st.session_state:
     try:
         migrate_add_calculation_columns()
-        from lib.storage import migrate_phase4_columns, migrate_phase4_native_units
+        from lib.storage import migrate_phase4_columns, migrate_phase4_native_units, migrate_web_search_columns
         migrate_phase4_columns()
         migrate_phase4_native_units()
+        migrate_web_search_columns()
         st.session_state.migration_done = True
     except Exception as e:
         import logging
@@ -187,6 +188,28 @@ def display_building_info(data: dict):
     gfa_calc = data.get('gfa_calculated')
     gfa_cols[0].metric("GFA — Self Reported", format_number(gfa_sr, " sqft"))
     gfa_cols[1].metric("GFA — Calculated", format_number(gfa_calc, " sqft"))
+
+    # Additional building characteristics (from PLUTO enrichment / web search)
+    extra_fields = {}
+    if data.get('building_owner'):
+        extra_fields['Building Owner'] = data['building_owner']
+    if data.get('num_floors'):
+        extra_fields['Number of Floors'] = str(data['num_floors'])
+    if data.get('floors_above_grade') or data.get('floors_below_grade'):
+        above = data.get('floors_above_grade', 'N/A')
+        below = data.get('floors_below_grade', 'N/A')
+        extra_fields['Floor Breakdown'] = f"{above} above / {below} below grade"
+    if data.get('num_elevators'):
+        extra_fields['Elevators'] = str(data['num_elevators'])
+    if data.get('num_residential_units'):
+        extra_fields['Residential Units'] = str(data['num_residential_units'])
+    if data.get('landmark_status'):
+        extra_fields['Landmark Status'] = data['landmark_status']
+
+    if extra_fields:
+        extra_cols = st.columns(min(len(extra_fields), 4))
+        for i, (label, value) in enumerate(extra_fields.items()):
+            extra_cols[i % len(extra_cols)].metric(label, value)
 
     # Non-zero use types with square footage
     st.subheader("Use Types")
@@ -690,6 +713,57 @@ def render_debug_sidebar(data: dict):
             st.markdown(f"**{section_name}:**")
             st.text(section_data)
 
+    # Section 6: Web Search Fallback (Step 6)
+    with st.sidebar.expander("Web Search Fallback (Step 6)", expanded=False):
+        # Show web search metadata if available
+        ws_meta = data.get('web_search_metadata') or data.get('_web_search_metadata')
+        if ws_meta:
+            if isinstance(ws_meta, str):
+                import json as _json
+                try:
+                    ws_meta = _json.loads(ws_meta)
+                except Exception:
+                    pass
+
+            if isinstance(ws_meta, dict):
+                st.markdown(f"**Source:** {ws_meta.get('source', 'N/A')}")
+                st.markdown(f"**Timestamp:** {ws_meta.get('timestamp', 'N/A')}")
+                fields_found = ws_meta.get('fields_found', [])
+                st.markdown(f"**Fields Found:** {', '.join(fields_found) if fields_found else 'None'}")
+                searches_used = ws_meta.get('searches_used', 0)
+                if searches_used:
+                    st.markdown(f"**Web Searches Used:** {searches_used}")
+
+                urls = ws_meta.get('search_urls', [])
+                if urls:
+                    st.markdown("**Source URLs:**")
+                    for u in urls[:5]:
+                        title = u.get('title', u.get('url', ''))
+                        st.text(f"  {title}")
+            else:
+                st.json(ws_meta)
+        else:
+            st.info("No web search data (Step 6 may have been skipped or all fields were already populated)")
+
+        # Show web-search-sourced fields
+        ws_fields = {
+            'Building Owner': data.get('building_owner'),
+            'Num Floors': data.get('num_floors'),
+            'Floors Above Grade': data.get('floors_above_grade'),
+            'Floors Below Grade': data.get('floors_below_grade'),
+            'Num Residential Units': data.get('num_residential_units'),
+            'Num Elevators': data.get('num_elevators'),
+            'Landmark Status': data.get('landmark_status'),
+            'DOF Address': data.get('dof_address'),
+        }
+        populated = {k: v for k, v in ws_fields.items() if v is not None}
+        if populated:
+            st.markdown("#### Enrichment Fields")
+            for label, value in populated.items():
+                st.text(f"  {label}: {value}")
+        else:
+            st.text("  (no enrichment fields populated)")
+
 
 def display_database_record(data: dict):
     """Display complete database record from building_metrics table."""
@@ -815,7 +889,22 @@ def display_database_record(data: dict):
                 st.text("  (not generated)")
             st.divider()
 
-    # Section 8: Data Source Tracking
+    # Section 8: Web Search Enrichment (Step 6)
+    with st.expander("Web Search Enrichment (Step 6)", expanded=True):
+        ws_fields_db = {
+            'Building Owner': data.get('building_owner'),
+            'Number of Floors': data.get('num_floors'),
+            'Floors Above Grade': data.get('floors_above_grade'),
+            'Floors Below Grade': data.get('floors_below_grade'),
+            'Residential Units': data.get('num_residential_units'),
+            'Elevators': data.get('num_elevators'),
+            'Landmark Status': data.get('landmark_status'),
+            'DOF Address': data.get('dof_address'),
+        }
+        for label, value in ws_fields_db.items():
+            st.text(f"{label}: {value if value is not None else 'N/A'}")
+
+    # Section 9: Data Source Tracking
     with st.expander("Data Source Tracking", expanded=True):
         tracking_fields = {
             'Data Source': data.get('data_source'),

@@ -11,3 +11,4 @@ sqlalchemy>=2.0
 requests>=2.31
 sodapy>=2.2.0
 backoff>=2.2
+firecrawl-py>=1.0

@@ -516,6 +516,53 @@ def migrate_phase4_native_units():
         conn.close()
 
 
+def migrate_web_search_columns():
+    """
+    Add web search fallback columns to building_metrics table.
+
+    Adds 9 new columns for data sourced from web search (Step 6):
+    - building_owner (TEXT): Property owner from PLUTO/DOF/web search
+    - num_floors (INTEGER): Total floors from PLUTO/DOB BIS/ZoLa
+    - floors_above_grade (INTEGER): Floors above ground from DOB BIS/web
+    - floors_below_grade (INTEGER): Basement/cellar levels from DOB BIS/web
+    - num_residential_units (INTEGER): Residential units from PLUTO/ZoLa
+    - num_elevators (INTEGER): Elevator count from DOB BIS/web
+    - landmark_status (TEXT): Landmark designation from Landmarks GIS/PLUTO
+    - dof_address (TEXT): DOF tax records address (may differ from LL97)
+    - web_search_metadata (JSONB): Audit trail of source URLs and timestamps
+
+    This function is idempotent - safe to run multiple times.
+    """
+    conn = get_connection()
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    try:
+        web_search_columns = {
+            "building_owner": "TEXT",
+            "num_floors": "INTEGER",
+            "floors_above_grade": "INTEGER",
+            "floors_below_grade": "INTEGER",
+            "num_residential_units": "INTEGER",
+            "num_elevators": "INTEGER",
+            "landmark_status": "TEXT",
+            "dof_address": "TEXT",
+            "web_search_metadata": "JSONB",
+        }
+
+        for col, col_type in web_search_columns.items():
+            cursor.execute(f"""
+                ALTER TABLE building_metrics
+                ADD COLUMN IF NOT EXISTS {col} {col_type};
+            """)
+
+        print("Migration complete: Added 9 web search columns")
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # Export list for external reference
 __all__ = [
     'create_building_metrics_table',
@@ -524,5 +571,6 @@ __all__ = [
     'migrate_add_calculation_columns',
     'migrate_phase4_columns',
     'migrate_phase4_native_units',
+    'migrate_web_search_columns',
     'USE_TYPE_SQFT_COLUMNS'
 ]

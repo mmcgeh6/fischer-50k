@@ -1,5 +1,5 @@
 """
-Waterfall orchestrator for 5-step data retrieval process.
+Waterfall orchestrator for 6-step data retrieval process.
 
 Executes the data retrieval waterfall:
 1. Identity & Compliance (LL97 -> PLUTO -> GeoSearch fallback chain)
@@ -7,6 +7,7 @@ Executes the data retrieval waterfall:
 3. Mechanical Retrieval (LL87 raw table query)
 4. LL97 Penalty Calculations
 5. Narrative Generation
+6. Web Search Fallback (PLUTO enrichment + Firecrawl + Claude web search)
 
 Saves results to Building_Metrics table and returns complete building data.
 """
@@ -24,6 +25,15 @@ from lib.api_client import generate_all_narratives
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+def _get_secret(key: str):
+    """Get a secret from Streamlit secrets (if in Streamlit context)."""
+    try:
+        import streamlit as st
+        return st.secrets.get(key)
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -232,13 +242,14 @@ def resolve_and_fetch(user_input: str, save_to_db: bool = True) -> Dict[str, Any
 
 def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any]:
     """
-    Execute the 5-step data retrieval waterfall for a given BBL.
+    Execute the 6-step data retrieval waterfall for a given BBL.
 
     Step 1: Identity & Compliance (LL97 -> PLUTO -> GeoSearch fallback)
     Step 2: Live Usage Fetch (LL84 API -> PLUTO fallback)
     Step 3: Mechanical Retrieval (LL87 raw table)
     Step 4: LL97 Penalty Calculations
     Step 5: Narrative Generation
+    Step 6: Web Search Fallback (fills gaps with PLUTO enrichment, Firecrawl, Claude)
 
     Args:
         bbl: 10-digit BBL string (no dashes)
@@ -280,7 +291,10 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                 'year_built': pluto_data.get('year_built'),
                 'gfa': pluto_data.get('gfa'),
                 'address': pluto_address,
-                'zip_code': pluto_data.get('zip_code')
+                'zip_code': pluto_data.get('zip_code'),
+                'num_floors': pluto_data.get('num_floors'),
+                'building_owner': pluto_data.get('owner_name'),
+                'num_residential_units': pluto_data.get('num_residential_units'),
             })
             if '_pluto_api_raw' in pluto_data:
                 result['_pluto_api_raw'] = pluto_data['_pluto_api_raw']
@@ -303,7 +317,10 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
             result.update({
                 'year_built': pluto_data.get('year_built'),
                 'gfa': pluto_data.get('gfa'),
-                'zip_code': pluto_data.get('zip_code')
+                'zip_code': pluto_data.get('zip_code'),
+                'num_floors': pluto_data.get('num_floors'),
+                'building_owner': pluto_data.get('owner_name'),
+                'num_residential_units': pluto_data.get('num_residential_units'),
             })
             if '_pluto_api_raw' in pluto_data:
                 result['_pluto_api_raw'] = pluto_data['_pluto_api_raw']
@@ -365,7 +382,10 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
                     'year_built': pluto_data.get('year_built'),
                     'gfa': pluto_data.get('gfa'),
                     'address': pluto_data.get('address'),
-                    'zip_code': pluto_data.get('zip_code')
+                    'zip_code': pluto_data.get('zip_code'),
+                    'num_floors': pluto_data.get('num_floors'),
+                    'building_owner': pluto_data.get('owner_name'),
+                    'num_residential_units': pluto_data.get('num_residential_units'),
                 })
                 if '_pluto_api_raw' in pluto_data:
                     result['_pluto_api_raw'] = pluto_data['_pluto_api_raw']
@@ -499,6 +519,85 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
 
     except Exception as e:
         logger.error(f"Step 5: Narrative generation error for BBL {bbl}: {e}")
+
+    # ========================================================================
+    # STEP 6: Web Search Fallback (fills gaps when APIs return incomplete data)
+    # ========================================================================
+
+    try:
+        from lib.web_search import run_web_search_fallback, CRITICAL_FIELDS, ENRICHMENT_FIELDS, ALL_TARGET_FIELDS
+
+        # Check if any target fields are still missing
+        missing_critical = [f for f in CRITICAL_FIELDS if not result.get(f)]
+        missing_enrichment = [f for f in ENRICHMENT_FIELDS if not result.get(f)]
+        missing_any = missing_critical + missing_enrichment
+
+        if missing_any:
+            logger.info(
+                f"Step 6: {len(missing_any)} target fields missing "
+                f"({len(missing_critical)} critical, {len(missing_enrichment)} enrichment) "
+                f"— running web search fallback"
+            )
+
+            # Check API key availability to determine which layers to use
+            has_firecrawl = bool(
+                os.environ.get("FIRECRAWL_API_KEY")
+                or _get_secret("FIRECRAWL_API_KEY")
+            )
+            has_anthropic = bool(
+                os.environ.get("ANTHROPIC_API_KEY")
+                or _get_secret("ANTHROPIC_API_KEY")
+            )
+
+            new_fields, new_sources = run_web_search_fallback(
+                bbl=bbl,
+                result=result,
+                skip_firecrawl=not has_firecrawl,
+                skip_claude_search=not has_anthropic,
+            )
+
+            # Merge new fields into result (never overwrites existing data)
+            for key, value in new_fields.items():
+                if value is None:
+                    continue
+                if key.startswith('_'):
+                    # Metadata keys (e.g. _web_search_metadata)
+                    result[key] = value
+                elif not result.get(key):
+                    result[key] = value
+
+            if new_sources:
+                data_sources.extend(new_sources)
+
+            # Build web_search_metadata for DB storage (must be JSON string, not dict)
+            ws_meta = new_fields.get('_web_search_metadata')
+            if ws_meta:
+                import json as _json
+                result['web_search_metadata'] = _json.dumps(ws_meta) if isinstance(ws_meta, dict) else ws_meta
+
+            filled = {k: v for k, v in new_fields.items() if not k.startswith('_')}
+            logger.info(
+                f"Step 6: Filled {len(filled)} fields from {new_sources}: "
+                f"{list(filled.keys())}"
+            )
+
+            # Persist web search results to DB immediately
+            if save_to_db and filled:
+                ws_db_data = {'bbl': bbl}
+                ws_db_data.update(filled)
+                if ws_meta:
+                    # result['web_search_metadata'] is already a JSON string (serialized above)
+                    ws_db_data['web_search_metadata'] = result['web_search_metadata']
+                try:
+                    upsert_building_metrics(ws_db_data)
+                    logger.info(f"Step 6: Saved web search data to Building_Metrics for BBL {bbl}")
+                except Exception as e:
+                    logger.error(f"Step 6: Failed to save web search data: {e}")
+        else:
+            logger.info("Step 6: All target fields populated, skipping web search")
+
+    except Exception as e:
+        logger.error(f"Step 6: Web search fallback error for BBL {bbl}: {e}")
 
     # ========================================================================
     # Finalize and Save

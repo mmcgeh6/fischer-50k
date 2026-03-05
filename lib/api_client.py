@@ -324,7 +324,7 @@ Write a 1-2 paragraph narrative about the {category.lower()} based strictly on t
 
     message = client.messages.create(
         model="claude-sonnet-4-5-20250929",
-        max_tokens=1024,
+        max_tokens=10000,
         system=system_prompt,
         temperature=0.3,  # Low temperature for analytical consistency
         messages=[
