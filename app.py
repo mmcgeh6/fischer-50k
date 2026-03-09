@@ -99,11 +99,10 @@ def flush_all_session_caches():
     st.session_state.data_source = None
     st.session_state.last_processed = None
 
-    # --- 2. Delete narrative widget keys ---
-    for cat in NARRATIVE_CATEGORIES:
-        wk = f"narrative_{cat}"
-        if wk in st.session_state:
-            del st.session_state[wk]
+    # --- 2. Delete narrative widget keys (BBL-scoped) ---
+    keys_to_delete = [k for k in st.session_state if k.startswith("narrative_")]
+    for wk in keys_to_delete:
+        del st.session_state[wk]
 
     # --- 3. Delete penalty / energy-input widget keys ---
     for wk in [
@@ -120,9 +119,10 @@ def flush_all_session_caches():
         if wk in st.session_state:
             del st.session_state[wk]
 
-    # --- 5. Delete narrative save button key ---
-    if "save_narratives" in st.session_state:
-        del st.session_state["save_narratives"]
+    # --- 5. Delete narrative save/regenerate button keys ---
+    for btn_key in ["save_narratives", "regenerate_narratives"]:
+        if btn_key in st.session_state:
+            del st.session_state[btn_key]
 
     # --- 6. Delete manual building detail widget keys ---
     for wk in [
@@ -610,12 +610,11 @@ def display_narratives(narratives: dict, data: dict):
     st.markdown("*AI-generated descriptions based on available building data. Edit below and save.*")
 
     narrative_col_map = {
-        'Building Envelope': 'envelope_narrative',
-        'Heating System': 'heating_narrative',
-        'Cooling System': 'cooling_narrative',
-        'Air Distribution System': 'air_distribution_narrative',
-        'Ventilation System': 'ventilation_narrative',
-        'Domestic Hot Water System': 'dhw_narrative',
+        'Ventilation': 'ventilation_narrative',
+        'Controls': 'controls_narrative',
+        'Heating': 'heating_narrative',
+        'Cooling': 'cooling_narrative',
+        'Domestic Hot Water': 'dhw_narrative',
     }
 
     if not narratives:
@@ -631,7 +630,7 @@ def display_narratives(narratives: dict, data: dict):
                         f"Edit {category}",
                         value=narrative,
                         height=200,
-                        key=f"narrative_{category}",
+                        key=f"narrative_{category}_{data.get('bbl', '')}",
                         label_visibility="collapsed"
                     )
                     st.session_state.edited_narratives[category] = edited
@@ -649,6 +648,31 @@ def display_narratives(narratives: dict, data: dict):
             st.success("Narratives saved to Supabase!")
         except Exception as e:
             st.error(f"Save failed: {e}")
+
+    # Regenerate button
+    if st.button("Regenerate Narratives", key="regenerate_narratives",
+                 help="Force-regenerate all 5 narratives using Claude API"):
+        import os
+        api_key = os.environ.get("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY", None)
+        if not api_key:
+            st.error("ANTHROPIC_API_KEY not found. Cannot regenerate narratives.")
+        elif not data.get('ll87_raw'):
+            st.warning("No LL87 data available for this building. Cannot generate equipment narratives.")
+        else:
+            with st.spinner("Regenerating narratives with Claude (this may take 30-60 seconds)..."):
+                try:
+                    fresh = generate_all_narratives(data)
+                    st.session_state.narratives = fresh
+                    st.session_state.edited_narratives = {}
+                    # Clear BBL-scoped narrative widget keys so fresh values display
+                    bbl = data.get('bbl', '')
+                    for cat in NARRATIVE_CATEGORIES:
+                        wk = f"narrative_{cat}_{bbl}"
+                        if wk in st.session_state:
+                            del st.session_state[wk]
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Regeneration failed: {e}")
 
     # Debug info is now in the sidebar — see render_debug_sidebar()
 
@@ -765,11 +789,10 @@ def render_debug_sidebar(data: dict):
 
         st.markdown("#### Existing Narratives")
         narrative_cols_dbg = {
-            'Building Envelope': 'envelope_narrative',
-            'Heating System': 'heating_narrative',
-            'Cooling System': 'cooling_narrative',
-            'Air Distribution': 'air_distribution_narrative',
             'Ventilation': 'ventilation_narrative',
+            'Controls': 'controls_narrative',
+            'Heating': 'heating_narrative',
+            'Cooling': 'cooling_narrative',
             'DHW': 'dhw_narrative',
         }
         for label, col in narrative_cols_dbg.items():
@@ -777,8 +800,8 @@ def render_debug_sidebar(data: dict):
             st.text(f"  {label}: {f'{len(val)} chars' if val else 'None'}")
 
         st.markdown("#### LL87 Equipment Data Extracted for Prompts")
-        from lib.api_client import _extract_all_equipment_data
-        equipment = _extract_all_equipment_data(data.get('ll87_raw'))
+        from lib.api_client import _extract_all_category_data
+        equipment = _extract_all_category_data(data.get('ll87_raw'))
         for section_name, section_data in equipment.items():
             st.markdown(f"**{section_name}:**")
             st.text(section_data)
@@ -965,12 +988,11 @@ def display_database_record(data: dict):
     # Section 7: AI-Generated Narratives
     with st.expander("AI-Generated Narratives (Step 5)", expanded=False):
         narrative_fields = {
-            'Building Envelope Narrative': data.get('envelope_narrative'),
-            'Heating System Narrative': data.get('heating_narrative'),
-            'Cooling System Narrative': data.get('cooling_narrative'),
-            'Air Distribution System Narrative': data.get('air_distribution_narrative'),
-            'Ventilation System Narrative': data.get('ventilation_narrative'),
-            'Domestic Hot Water System Narrative': data.get('dhw_narrative'),
+            'Ventilation Narrative': data.get('ventilation_narrative'),
+            'Controls Narrative': data.get('controls_narrative'),
+            'Heating Narrative': data.get('heating_narrative'),
+            'Cooling Narrative': data.get('cooling_narrative'),
+            'Domestic Hot Water Narrative': data.get('dhw_narrative'),
         }
 
         for label, value in narrative_fields.items():
@@ -1094,12 +1116,11 @@ if submitted:
 
                     # Extract narratives from waterfall result
                     narrative_map = {
-                        'Building Envelope': 'envelope_narrative',
-                        'Heating System': 'heating_narrative',
-                        'Cooling System': 'cooling_narrative',
-                        'Air Distribution System': 'air_distribution_narrative',
-                        'Ventilation System': 'ventilation_narrative',
-                        'Domestic Hot Water System': 'dhw_narrative',
+                        'Ventilation': 'ventilation_narrative',
+                        'Controls': 'controls_narrative',
+                        'Heating': 'heating_narrative',
+                        'Cooling': 'cooling_narrative',
+                        'Domestic Hot Water': 'dhw_narrative',
                     }
 
                     # Build narratives dict from either the original keys or DB keys
@@ -1134,12 +1155,11 @@ if submitted:
 
                     # Extract narratives from cached data
                     narrative_map = {
-                        'Building Envelope': 'envelope_narrative',
-                        'Heating System': 'heating_narrative',
-                        'Cooling System': 'cooling_narrative',
-                        'Air Distribution System': 'air_distribution_narrative',
-                        'Ventilation System': 'ventilation_narrative',
-                        'Domestic Hot Water System': 'dhw_narrative',
+                        'Ventilation': 'ventilation_narrative',
+                        'Controls': 'controls_narrative',
+                        'Heating': 'heating_narrative',
+                        'Cooling': 'cooling_narrative',
+                        'Domestic Hot Water': 'dhw_narrative',
                     }
 
                     narratives = {}

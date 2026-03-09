@@ -1,212 +1,262 @@
 """
 Claude API client for system narrative generation.
 
-Generates 6 building system narratives using Anthropic Claude:
-1. Building Envelope
-2. Heating System
-3. Cooling System
-4. Air Distribution System
-5. Ventilation System
-6. Domestic Hot Water System
+Generates 5 building system narratives using Anthropic Claude:
+1. Ventilation
+2. Controls
+3. Heating
+4. Cooling
+5. Domestic Hot Water
 
-Uses data-only approach per CLAUDE.md — no inferences,
-explicit "not documented" fallbacks for missing data.
+Narratives run sequentially - each references completed preceding narratives.
+Uses explicit LL87 JSONB column lists per category (not keyword matching).
 """
 
 import os
 import streamlit as st
 from anthropic import Anthropic
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import backoff
 
 
-# Six narrative categories per CLAUDE.md
+# Five narrative categories in generation order
 NARRATIVE_CATEGORIES = [
-    "Building Envelope",
-    "Heating System",
-    "Cooling System",
-    "Air Distribution System",
-    "Ventilation System",
-    "Domestic Hot Water System"
+    "Ventilation",
+    "Controls",
+    "Heating",
+    "Cooling",
+    "Domestic Hot Water",
 ]
 
-# Per-category instructions from Gabe's AI Prompt Specification
+
+def _build_sys_columns(prefix, sys_label, count):
+    """Helper to build column name lists like 'Prefix: HVAC Sys 1' through count."""
+    return [f"{prefix}: {sys_label} {i}" for i in range(1, count + 1)]
+
+
+# Explicit LL87 JSONB column names per category.
+CATEGORY_COLUMNS: Dict[str, List[str]] = {
+    "Ventilation": (
+        _build_sys_columns("Air Exhaust Bathrooms", "HVAC Sys", 6)
+        + _build_sys_columns("Air Exhaust Corridors", "HVAC Sys", 6)
+        + _build_sys_columns("Air Exhaust Garage", "HVAC Sys", 6)
+        + _build_sys_columns("Air Exhaust Kitchens", "HVAC Sys", 6)
+        + _build_sys_columns("Air Exhaust Other", "HVAC Sys", 6)
+        + _build_sys_columns("Air Supply Common Area", "HVAC Sys", 6)
+        + _build_sys_columns("Air Supply Corridors", "HVAC Sys", 6)
+        + _build_sys_columns("Air Supply Other", "HVAC Sys", 6)
+        + _build_sys_columns("Air Supply Tenant Spaces", "HVAC Sys", 6)
+        + _build_sys_columns("Central Distribution Type", "HVAC Sys", 6)
+        + _build_sys_columns("Delivery Equipment Type", "HVAC Sys", 6)
+        + _build_sys_columns("Demand Control Ventilation", "HVAC Sys", 6)
+        + _build_sys_columns("Direct Digital Controls", "HVAC Sys", 6)
+        + _build_sys_columns("Energy Recovery Ventilation", "HVAC Sys", 6)
+        + _build_sys_columns("Fan Control", "HVAC Sys", 6)
+        + _build_sys_columns("Manual Thermostat Controls", "HVAC Sys", 6)
+        + _build_sys_columns("Name: Space Function 1", "HVAC Sys", 6)
+        + _build_sys_columns("Name: Space Function 2", "HVAC Sys", 6)
+        + _build_sys_columns("Name: Space Function 3", "HVAC Sys", 6)
+        + _build_sys_columns("No Controls", "HVAC Sys", 6)
+        + _build_sys_columns("Outdoor Air", "HVAC Sys", 6)
+        + _build_sys_columns("Packged Terminal Equipment Type", "HVAC Sys", 6)
+        + _build_sys_columns("PnuematicControls", "HVAC Sys", 6)
+        + _build_sys_columns("Programmable Thermostat Controls", "HVAC Sys", 6)
+        + _build_sys_columns("Reheat Type", "HVAC Sys", 6)
+        + _build_sys_columns("Supply Air Temperature Control", "HVAC Sys", 6)
+        + _build_sys_columns("Terminal Unit Type", "HVAC Sys", 6)
+        + _build_sys_columns("Thermal Zoning", "HVAC Sys", 6)
+        + _build_sys_columns("Ventilation System > 5 HP", "HVAC Sys", 6)
+    ),
+
+    "Controls": (
+        _build_sys_columns("Direct Digital Controls", "HVAC Sys", 6)
+        + _build_sys_columns("Manual Thermostat Controls", "HVAC Sys", 6)
+        + _build_sys_columns("No Controls", "HVAC Sys", 6)
+        + _build_sys_columns("Pneumatic Controls", "Cooling Plant", 4)
+        + _build_sys_columns("Pneumatic Controls", "Heating Plant", 4)
+        + _build_sys_columns("PnuematicControls", "HVAC Sys", 6)
+        + _build_sys_columns("Programmable Thermostat Controls", "HVAC Sys", 6)
+        + ["Building automation system? (Y/N)"]
+    ),
+
+    "Heating": (
+        _build_sys_columns("Building Automation System", "Heating Plant", 4)
+        + _build_sys_columns("Burner Type", "Heating Plant", 4)
+        + _build_sys_columns("Burner Year Installed", "Heating Plant", 4)
+        + _build_sys_columns("Direct Digital Controls", "Heating Plant", 4)
+        + _build_sys_columns("Fuel Type", "Heating Plant", 4)
+        + [f"Heating Plant Type {i}" for i in range(1, 5)]
+        + _build_sys_columns("Heating System Type", "HVAC Sys", 6)
+        + _build_sys_columns("Heating System Venting Type", "HVAC Sys", 6)
+        + _build_sys_columns("Number of Pieces of Equipment", "Heating Plant", 4)
+        + _build_sys_columns("Output Capacity", "Heating Plant", 4)
+        + _build_sys_columns("Plant Name", "Heating Plant", 4)
+        + _build_sys_columns("Rated Efficiency", "Heating Plant", 4)
+        + _build_sys_columns("Venting Type", "Heating Plant", 4)
+    ),
+
+    "Cooling": (
+        _build_sys_columns("Approximate Year Installed", "Cooling Plant", 4)
+        + _build_sys_columns("Building Automation System", "Cooling Plant", 4)
+        + _build_sys_columns("Chilled Water Reset", "Cooling Plant", 4)
+        + _build_sys_columns("Chiller Compressor Type", "Cooling Plant", 4)
+        + _build_sys_columns("Chiller Pump Control", "Cooling Plant", 4)
+        + _build_sys_columns("Condenser Type", "Cooling Plant", 4)
+        + _build_sys_columns("Condition", "Cooling Plant", 4)
+        + _build_sys_columns("Cooling System Approximate Year Installed", "HVAC Sys", 6)
+        + _build_sys_columns("Cooling System Fuel Source", "HVAC Sys", 6)
+        + _build_sys_columns("Cooling System Linked Cooling Plant", "HVAC Sys", 6)
+        + _build_sys_columns("Cooling System Number of Pieces of Equipment", "HVAC Sys", 6)
+        # Note: Sys 5 has a typo "SystemType" in original data
+        + ["Cooling System Type: HVAC Sys 1", "Cooling System Type: HVAC Sys 2",
+           "Cooling System Type: HVAC Sys 3", "Cooling System Type: HVAC Sys 4",
+           "Cooling SystemType: HVAC Sys 5", "Cooling System Type: HVAC Sys 6"]
+        + _build_sys_columns("Direct Digital Controls", "Cooling Plant", 4)
+        + _build_sys_columns("Fan Static Pressure Reset Control", "HVAC Sys", 6)
+        + _build_sys_columns("Fuel Type", "Cooling Plant", 4)
+        + _build_sys_columns("Number of Pieces of Equipment", "Cooling Plant", 4)
+        + _build_sys_columns("Other Central Distribution Type", "HVAC Sys", 6)
+        + _build_sys_columns("Other Delivery Equipment Type", "HVAC Sys", 6)
+        + _build_sys_columns("Output Capacity", "Cooling Plant", 4)
+        + _build_sys_columns("Pneumatic Controls", "Cooling Plant", 4)
+        + _build_sys_columns("Principle HVAC Type", "Space Function", 6)
+        # Condensing Plant fields (Plant 1 missing from Condenser Pump Control per spec)
+        + [f"Condenser Pump Control: Condensing Plant {i}" for i in range(2, 5)]
+        + _build_sys_columns("Condensing Plant Type", "Condenser Plant", 4)
+        + _build_sys_columns("Cooling Tower Fan Control", "Condensing Plant", 4)
+    ),
+
+    "Domestic Hot Water": (
+        _build_sys_columns("Type", "SHW Sys", 6)
+        + _build_sys_columns("Hot Water Plant", "SHW Sys", 6)
+        + _build_sys_columns("Fuel Source", "SHW Sys", 6)
+        + _build_sys_columns("Venting Type", "SHW Sys", 6)
+        + _build_sys_columns("Efficiency units", "SHW Sys", 6)
+        + _build_sys_columns("Rated Efficiency", "SHW Sys", 6)
+        + _build_sys_columns("Approximate Year Installed", "SHW Sys", 6)
+        + _build_sys_columns("Location of Equipment", "SHW Sys", 6)
+        + _build_sys_columns("Distribution Type", "SHW Sys", 6)
+        + _build_sys_columns("Tank Volume", "SHW Sys", 6)
+        + _build_sys_columns("Tank Insulation Thickness", "SHW Sys", 6)
+        + _build_sys_columns("Tank Insulation R-Value", "SHW Sys", 6)
+        + _build_sys_columns("No Controls", "SHW Sys", 6)
+        + _build_sys_columns("Time Based Controls", "SHW Sys", 6)
+        + _build_sys_columns("Aquastat Based Controls", "SHW Sys", 6)
+        + _build_sys_columns("Demand Based Controls", "SHW Sys", 6)
+        + _build_sys_columns("EMS/BMS Controls", "SHW Sys", 6)
+        + _build_sys_columns("Other Controls", "SHW Sys", 6)
+    ),
+}
+
+# Per-category instructions supplementing the main system prompt
 CATEGORY_INSTRUCTIONS = {
-    "Building Envelope": """Describe, if provided:
-- Wall, roof, and window assemblies
-- Insulation levels or glazing types only if documented
-Do not infer thermal performance or compliance.""",
+    "Ventilation": """Focus on ventilation and air distribution systems (HVAC Sys 1-6).
+Describe exhaust systems (bathrooms, corridors, garage, kitchens, other), supply air systems
+(common area, corridors, tenant spaces, other), central distribution and delivery equipment types,
+demand control ventilation, energy recovery ventilation, fan control, terminal units, thermal zoning,
+and outdoor air provisions. There are up to 6 systems; prioritize System 1.""",
 
-    "Heating System": """Describe, if provided:
-- Boilers, heat exchangers, district steam connections
-- Fuel types only if explicitly documented
-- Heating distribution type (steam or hot water) only if stated
-- Heating-related fuel consumption (kBtu), reported as-is
-Do not infer equipment type from fuel consumption alone.""",
+    "Controls": """Focus on building controls across all HVAC systems and plants.
+Describe direct digital controls, manual thermostat controls, programmable thermostat controls,
+pneumatic controls (for HVAC systems, heating plants, and cooling plants), and building automation
+system presence. There are up to 6 HVAC systems and up to 4 heating/cooling plants; prioritize
+System/Plant 1. Reference the Ventilation narrative for this building.""",
 
-    "Cooling System": """Describe, if provided:
-- Chillers, cooling towers, and associated equipment
-- Cooling system configuration only if explicitly documented
-- Cooling-related electric consumption if provided
-Do not infer efficiency, sequencing, or controls.""",
+    "Heating": """Focus on heating plants (up to 4) and HVAC system heating components (up to 6).
+Describe heating plant types, fuel types, burner types and installation years, number of equipment
+pieces, venting types, and heating system types per HVAC system. There are up to 4 heating plants
+and 6 HVAC systems; prioritize Plant/System 1. Reference the Ventilation and Controls narratives
+for this building.""",
 
-    "Air Distribution System": """Describe, if provided:
-- Air handling units, rooftop units, DOAS systems
-- Supply, return, and exhaust systems if documented
-- Terminal units (VAV, fan coils, radiators)
-- Reheat presence only if explicitly stated""",
+    "Cooling": """Focus on cooling plants (up to 4), HVAC system cooling components (up to 6),
+and condensing plants (up to 4). Describe chiller compressor types, condenser types, chilled water
+reset, pump controls, fuel types, cooling system types per HVAC system, fan static pressure reset,
+and cooling tower fan control. There are up to 4 cooling plants, 6 HVAC systems, and 4 condensing
+plants; prioritize Plant/System 1. Reference the Ventilation, Controls, and Heating narratives
+for this building.""",
 
-    "Ventilation System": """Describe, if provided:
-- Air handling units, rooftop units, DOAS systems
-- Supply, return, and exhaust systems if documented
-- Terminal units (VAV, fan coils, radiators)
-- Reheat presence only if explicitly stated""",
-
-    "Domestic Hot Water System": """Describe, if provided:
-- DHW generation equipment
-- Fuel type or electric service only if documented""",
+    "Domestic Hot Water": """Focus on service hot water (SHW) systems (up to 6).
+Describe SHW system types, hot water plant connections, fuel sources, venting types, equipment
+locations, distribution types, tank volumes and insulation, and control types (time-based,
+aquastat, demand-based, EMS/BMS). There are up to 6 SHW systems; prioritize System 1.
+Reference all preceding system narratives for this building.""",
 }
 
 
 def get_claude_client() -> Anthropic:
-    """
-    Get Anthropic client with API key from environment or Streamlit secrets.
-
-    Returns:
-        Configured Anthropic client
-
-    Raises:
-        ValueError: If no API key found
-    """
+    """Get Anthropic client with API key from environment or Streamlit secrets."""
     api_key = os.environ.get("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not found in environment or Streamlit secrets")
     return Anthropic(api_key=api_key)
 
 
-def _extract_equipment_data(ll87_raw: Optional[Dict], category: str) -> str:
+def _extract_category_data(ll87_raw: Optional[Dict], category: str) -> str:
     """
     Extract relevant equipment data from LL87 raw JSONB for a specific category.
 
-    Uses keyword-based pattern matching against actual LL87 field names, which
-    use formats like "Wall Construction 1", "Heating Plant Type 1",
-    "Cooling Plant Type: Cooling Plant 1", "Fan Control: HVAC Sys 1", etc.
-
-    Args:
-        ll87_raw: LL87 audit data as dict
-        category: Narrative category to extract for
-
-    Returns:
-        Formatted equipment description or "No equipment data available"
+    Uses explicit column name lists from CATEGORY_COLUMNS with case-insensitive fallback.
     """
     if not ll87_raw:
         return "No LL87 audit data was available for this building."
 
-    # Map categories to keyword patterns that match actual LL87 field names
-    # LL87 uses descriptive names like "Wall Construction 1", "Heating Plant Type 1"
-    category_keywords = {
-        "Building Envelope": [
-            "wall construction", "wall insulation", "roof ", "window ",
-            "glass type", "skylight", "foundation", "enclosure tightness",
-            "framing material", "demising wall", "exposed above grade",
-            "general building shape", "green roof",
-        ],
-        "Heating System": [
-            "heating plant", "heating system", "space heating",
-            "boiler", "heat exchanger",
-            "shw sys", "shw system", "shw ",
-        ],
-        "Cooling System": [
-            "cooling plant", "cooling system", "chiller", "condenser",
-            "cooling tower", "chilled water", "space cooling",
-        ],
-        "Air Distribution System": [
-            "hvac sys", "fan control", "air distribution", "air supply",
-            "delivery equipment", "central distribution", "thermal zoning",
-            "principle hvac type",
-        ],
-        "Ventilation System": [
-            "ventilation", "outdoor air", "air exhaust", "economizer",
-        ],
-        "Domestic Hot Water System": [
-            "shw sys", "shw system", "hot water", "service water heating",
-        ],
-    }
+    columns = CATEGORY_COLUMNS.get(category, [])
+    if not columns:
+        return f"No column mapping defined for {category}."
 
-    keywords = category_keywords.get(category, [])
+    # Build case-insensitive lookup of all LL87 fields
+    field_lookup = {}
+    for key in ll87_raw:
+        field_lookup[key.lower().strip()] = key
+
     found_data = []
+    for col_name in columns:
+        # Try exact match first, then case-insensitive
+        value = ll87_raw.get(col_name)
+        if value is None:
+            actual_key = field_lookup.get(col_name.lower().strip())
+            if actual_key:
+                value = ll87_raw[actual_key]
 
-    for field_name, value in ll87_raw.items():
         if value is None or value == "" or value == 0:
             continue
-        field_lower = field_name.lower()
-        for keyword in keywords:
-            if keyword in field_lower:
-                found_data.append(f"- {field_name}: {value}")
-                break
+
+        found_data.append(f"- {col_name}: {value}")
 
     if found_data:
         return "\n".join(found_data)
     return f"Detailed {category.lower()} specifications were not available in the provided data."
 
 
-def _extract_all_equipment_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
-    """
-    Extract ALL equipment data from LL87 raw JSONB, organized by section.
-
-    Returns a dict with keys for each equipment section. Each value is a
-    formatted string of matching LL87 fields, or a "not documented" message.
-    """
-    sections = {
-        "Building Automation System": [
-            "building automation", "bas ", "controls",
-        ],
-        "Heating Equipment Specs": [
-            "heating plant", "heating system", "space heating",
-            "boiler", "heat exchanger", "hot water pump", "zone equip",
-            "shw sys", "shw system", "shw ",
-        ],
-        "Cooling Equipment Specs": [
-            "cooling plant", "cooling system", "chiller", "condenser",
-            "cooling tower", "chilled water", "space cooling",
-        ],
-        "Air Distribution Equipment Specs": [
-            "hvac sys", "fan control", "air distribution", "air supply",
-            "delivery equipment", "central distribution", "thermal zoning",
-            "principle hvac type", "air handling", "rooftop unit", "packaged unit",
-        ],
-        "Ventilation Equipment Specs": [
-            "ventilation", "outdoor air", "air exhaust", "economizer",
-            "make-up air", "makeup air", "dedicated outdoor air", "energy recovery",
-        ],
-        "Building Envelope": [
-            "wall construction", "wall insulation", "roof ", "window ",
-            "glass type", "skylight", "foundation", "enclosure tightness",
-            "framing material", "demising wall", "exposed above grade",
-            "general building shape", "green roof",
-        ],
-        "Domestic Hot Water": [
-            "shw sys", "shw system", "hot water", "service water heating",
-        ],
+def _extract_all_category_data(ll87_raw: Optional[Dict]) -> Dict[str, str]:
+    """Extract equipment data for all 5 narrative categories from LL87 raw JSONB."""
+    return {
+        category: _extract_category_data(ll87_raw, category)
+        for category in NARRATIVE_CATEGORIES
     }
 
-    if not ll87_raw:
-        return {name: "No LL87 audit data was available for this building." for name in sections}
 
-    result = {}
-    for section_name, keywords in sections.items():
-        found = []
-        for field_name, value in ll87_raw.items():
-            if value is None or value == "" or value == 0:
-                continue
-            field_lower = field_name.lower()
-            for kw in keywords:
-                if kw in field_lower:
-                    found.append(f"- {field_name}: {value}")
-                    break
-        result[section_name] = "\n".join(found) if found else f"Detailed {section_name.lower()} specifications were not available in the provided data."
-
-    return result
+SYSTEM_PROMPT = (
+    'You are supporting an engineering consultant by digesting a large database '
+    'of information. For each building, you are expected to provide a brief '
+    'description of the HVAC systems on site along with general functionality. '
+    'This should be in paragraph form, not to exceed 3 paragraphs. Please include '
+    'system type, noteworthy equipment within each system along with quantity and '
+    'how it is controlled. Please exclude system ratings and capacities. Only '
+    'discuss what is present; do not mention systems that are not present. There '
+    'may be multiple systems present (for example, "sys 1" and "sys 2"); please '
+    'prioritize system 1. Please also reference other system narratives for this '
+    'building.\n\n'
+    'CRITICAL RULES:\n'
+    '1. Include ONLY information explicitly provided in the data\n'
+    '2. Do NOT infer system type, configuration, controls, or operation from assumptions\n'
+    '3. Do NOT recommend measures, estimate savings, or describe future work\n'
+    '4. Use a professional, third-person engineering tone\n'
+    '5. Maximum three paragraphs\n'
+    '6. If data is missing, state: "Detailed system specifications were not available '
+    'in the provided data."\n'
+    '7. Exclude system ratings and capacities from the narrative'
+)
 
 
 @backoff.on_exception(backoff.expo, Exception, max_tries=3, jitter=backoff.full_jitter)
@@ -214,44 +264,25 @@ def generate_narrative(
     client: Anthropic,
     category: str,
     building_data: Dict[str, Any],
-    all_equipment: Optional[Dict[str, str]] = None
+    all_equipment: Optional[Dict[str, str]] = None,
+    preceding_narratives: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     Generate a single system narrative using Claude.
 
     Args:
         client: Anthropic client instance
-        category: Narrative category (e.g., "Heating System")
+        category: Narrative category (e.g., "Heating")
         building_data: Building data dict from database
-        all_equipment: Pre-extracted equipment data from _extract_all_equipment_data()
+        all_equipment: Pre-extracted equipment data
+        preceding_narratives: Completed narratives from earlier categories in this run
 
     Returns:
-        Generated narrative text (1-2 paragraphs)
+        Generated narrative text (1-3 paragraphs)
     """
-    # System prompt per Gabe's AI Prompt Specification
-    system_prompt = """You are a mechanical engineering expert writing building systems narratives for NYC buildings. These narratives are used in Energy Master Plans, Scope of Work (SOW) documentation, Local Law 97 (LL97) technical reporting, and Building Discovery reports.
-
-ALL narrative content must be directly supported by explicit data inputs. You must describe EXISTING CONDITIONS ONLY.
-
-CRITICAL RULES (Non-Negotiable):
-1. Include ONLY information explicitly provided in the data
-2. Do NOT infer system type, configuration, controls, or operation from general engineering assumptions, typical system configurations, building age, fuel use patterns, or professional intuition
-3. State WHAT exists or is consumed, not HOW systems operate unless explicitly documented
-4. Do NOT recommend measures, estimate savings, or describe future work
-5. Use a professional, third-person engineering tone
-6. Maximum two paragraphs per system section
-7. If data is missing, state: "Detailed system specifications were not available in the provided data."
-
-The resulting narratives must be:
-- Fully traceable to input data
-- Conservative and factual
-- Suitable for engineering, regulatory, and utility review"""
-
-    # Extract all equipment data if not pre-computed
     if all_equipment is None:
-        all_equipment = _extract_all_equipment_data(building_data.get('ll87_raw'))
+        all_equipment = _extract_all_category_data(building_data.get('ll87_raw'))
 
-    # Build context from building data
     year_built = building_data.get('year_built') or 'Not documented'
     property_type = building_data.get('property_type') or 'Not documented'
     gfa = building_data.get('gfa') or 0
@@ -262,24 +293,18 @@ The resulting narratives must be:
     fuel_oil = building_data.get('fuel_oil_kbtu') or 0
     steam = building_data.get('steam_kbtu') or 0
 
-    # Collect any existing narratives from building_data (from DB cache)
-    narrative_col_map = {
-        "Building Envelope": "envelope_narrative",
-        "Heating System": "heating_narrative",
-        "Cooling System": "cooling_narrative",
-        "Air Distribution System": "air_distribution_narrative",
-        "Ventilation System": "ventilation_narrative",
-        "Domestic Hot Water System": "dhw_narrative",
-    }
-    existing_narratives = []
-    for cat_name, col_name in narrative_col_map.items():
-        val = building_data.get(col_name)
-        if val:
-            existing_narratives.append(f"{cat_name}:\n{val}")
-    narratives_section = "\n\n".join(existing_narratives) if existing_narratives else "No previously generated narratives available."
+    # Build preceding narratives section
+    if preceding_narratives:
+        narr_parts = []
+        for cat_name, narr_text in preceding_narratives.items():
+            if narr_text and not narr_text.startswith("Error"):
+                narr_parts.append(f"{cat_name}:\n{narr_text}")
+        narratives_section = "\n\n".join(narr_parts) if narr_parts else "No preceding narratives available yet."
+    else:
+        narratives_section = "No preceding narratives available yet (this is the first narrative)."
 
-    # Get category-specific instructions
     cat_instructions = CATEGORY_INSTRUCTIONS.get(category, '')
+    category_data = all_equipment.get(category, 'Not documented')
 
     user_message = f"""Generate a {category} Narrative for this building.
 
@@ -293,40 +318,22 @@ BUILDING CONTEXT:
 - Natural Gas Use: {natural_gas:,} kBtu
 - Electricity Use - Grid Purchase: {electricity:,} kWh
 
-BUILDING AUTOMATION SYSTEM:
-{all_equipment.get('Building Automation System', 'Not documented')}
+{category.upper()} DATA:
+{category_data}
 
-HEATING EQUIPMENT SPECS (Boilers, Heat Exchangers, Hot Water Pumps, Zone Equip, Service Hot Water):
-{all_equipment.get('Heating Equipment Specs', 'Not documented')}
-
-COOLING EQUIPMENT SPECS (Chillers, Chilled Water Pumps, Cooling Towers, Condenser Water Pumps, Heat Exchangers):
-{all_equipment.get('Cooling Equipment Specs', 'Not documented')}
-
-AIR DISTRIBUTION EQUIPMENT SPECS (Air Handling Units, Rooftop Units, Packaged Units):
-{all_equipment.get('Air Distribution Equipment Specs', 'Not documented')}
-
-VENTILATION EQUIPMENT SPECS (Make-up Air Units, Dedicated Outdoor Air Systems, Energy Recovery Ventilators):
-{all_equipment.get('Ventilation Equipment Specs', 'Not documented')}
-
-BUILDING ENVELOPE DATA:
-{all_equipment.get('Building Envelope', 'Not documented')}
-
-DOMESTIC HOT WATER DATA:
-{all_equipment.get('Domestic Hot Water', 'Not documented')}
-
-EXISTING NARRATIVES:
+PRECEDING SYSTEM NARRATIVES (completed for this building - reference these):
 {narratives_section}
 
 CATEGORY-SPECIFIC INSTRUCTIONS:
 {cat_instructions}
 
-Write a 1-2 paragraph narrative about the {category.lower()} based strictly on the data above. If system data is incomplete or unavailable, use: "Detailed system specifications were not available in the provided data.\""""
+Write a 1-3 paragraph narrative about the {category.lower()} system based strictly on the data above. If system data is incomplete or unavailable, use: "Detailed system specifications were not available in the provided data.\""""
 
     message = client.messages.create(
         model="claude-sonnet-4-5-20250929",
         max_tokens=10000,
-        system=system_prompt,
-        temperature=0.3,  # Low temperature for analytical consistency
+        system=SYSTEM_PROMPT,
+        temperature=0.3,
         messages=[
             {"role": "user", "content": user_message}
         ]
@@ -337,28 +344,25 @@ Write a 1-2 paragraph narrative about the {category.lower()} based strictly on t
 
 def generate_all_narratives(building_data: Dict[str, Any]) -> Dict[str, str]:
     """
-    Generate all 6 system narratives for a building.
+    Generate all 5 system narratives for a building, sequentially.
 
-    Args:
-        building_data: Building data dict from database.fetch_building_by_bbl()
-
-    Returns:
-        Dict mapping category name to narrative text
-
-    Raises:
-        ValueError: If ANTHROPIC_API_KEY not configured
+    Each narrative receives the completed preceding narratives as context,
+    enabling cross-referencing between system descriptions.
     """
     client = get_claude_client()
     narratives = {}
+    completed = {}
 
-    # Extract all equipment data once for reuse across all 6 narratives
-    all_equipment = _extract_all_equipment_data(building_data.get('ll87_raw'))
+    all_equipment = _extract_all_category_data(building_data.get('ll87_raw'))
 
     for category in NARRATIVE_CATEGORIES:
         try:
-            narratives[category] = generate_narrative(client, category, building_data, all_equipment)
+            narratives[category] = generate_narrative(
+                client, category, building_data, all_equipment, completed
+            )
+            if not narratives[category].startswith("Error"):
+                completed[category] = narratives[category]
         except Exception as e:
-            # Store error message if narrative generation fails
             narratives[category] = f"Error generating narrative: {str(e)}"
 
     return narratives
@@ -368,22 +372,10 @@ def generate_single_narrative(
     building_data: Dict[str, Any],
     category: str
 ) -> str:
-    """
-    Generate a single narrative for testing or selective regeneration.
-
-    Args:
-        building_data: Building data dict
-        category: One of NARRATIVE_CATEGORIES
-
-    Returns:
-        Generated narrative text
-
-    Raises:
-        ValueError: If category not in NARRATIVE_CATEGORIES
-    """
+    """Generate a single narrative for testing or selective regeneration."""
     if category not in NARRATIVE_CATEGORIES:
         raise ValueError(f"Invalid category. Must be one of: {NARRATIVE_CATEGORIES}")
 
     client = get_claude_client()
-    all_equipment = _extract_all_equipment_data(building_data.get('ll87_raw'))
+    all_equipment = _extract_all_category_data(building_data.get('ll87_raw'))
     return generate_narrative(client, category, building_data, all_equipment)

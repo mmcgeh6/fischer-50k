@@ -250,6 +250,7 @@ def create_building_metrics_table():
                 air_distribution_narrative TEXT,
                 ventilation_narrative TEXT,
                 dhw_narrative TEXT,
+                controls_narrative TEXT,
 
                 -- Data source tracking
                 data_source VARCHAR(100),
@@ -582,3 +583,24 @@ __all__ = [
     'migrate_web_search_columns',
     'USE_TYPE_SQFT_COLUMNS'
 ]
+
+
+def migrate_controls_narrative_column():
+    """
+    Add controls_narrative column to building_metrics table.
+
+    This function is idempotent - safe to run multiple times.
+    """
+    conn = get_connection()
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            ALTER TABLE building_metrics
+            ADD COLUMN IF NOT EXISTS controls_narrative TEXT;
+        """)
+        print("Migration complete: Added controls_narrative column")
+    finally:
+        cursor.close()
+        conn.close()
