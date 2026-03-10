@@ -251,10 +251,11 @@ SYSTEM_PROMPT = (
     '1. Include ONLY information explicitly provided in the data\n'
     '2. Do NOT infer system type, configuration, controls, or operation from assumptions\n'
     '3. Do NOT recommend measures, estimate savings, or describe future work\n'
-    '4. Use a professional, third-person engineering tone\n'
+    '4. Write in a conversational, expert engineering tone — as if briefing a colleague\n'
     '5. Maximum three paragraphs\n'
-    '6. If data is missing, state: "Detailed system specifications were not available '
-    'in the provided data."\n'
+    '6. Only state what IS known — omit any topic or system where data is missing. '
+    'Never say "data not available", "not provided", "no information", or similar '
+    'disclaimers. If there is nothing to report, return an empty string.\n'
     '7. Exclude system ratings and capacities from the narrative'
 )
 
@@ -327,7 +328,7 @@ PRECEDING SYSTEM NARRATIVES (completed for this building - reference these):
 CATEGORY-SPECIFIC INSTRUCTIONS:
 {cat_instructions}
 
-Write a 1-3 paragraph narrative about the {category.lower()} system based strictly on the data above. If system data is incomplete or unavailable, use: "Detailed system specifications were not available in the provided data.\""""
+Write a 1-3 paragraph narrative about the {category.lower()} system based strictly on the data above. Only discuss what the data shows — if information is missing, simply omit it. Do not mention missing data or unavailability.\""""
 
     message = client.messages.create(
         model="claude-sonnet-4-5-20250929",
