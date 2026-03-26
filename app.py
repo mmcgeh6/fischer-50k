@@ -610,11 +610,12 @@ def display_narratives(narratives: dict, data: dict):
     st.markdown("*AI-generated descriptions based on available building data. Edit below and save.*")
 
     narrative_col_map = {
+        'Building Envelope': 'envelope_narrative',
         'Ventilation': 'ventilation_narrative',
-        'Controls': 'controls_narrative',
         'Heating': 'heating_narrative',
         'Cooling': 'cooling_narrative',
         'Domestic Hot Water': 'dhw_narrative',
+        'Controls': 'controls_narrative',
     }
 
     if not narratives:
@@ -651,7 +652,7 @@ def display_narratives(narratives: dict, data: dict):
 
     # Regenerate button
     if st.button("Regenerate Narratives", key="regenerate_narratives",
-                 help="Force-regenerate all 5 narratives using Claude API"):
+                 help="Force-regenerate all 6 narratives using Claude API"):
         import os
         api_key = os.environ.get("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY", None)
         if not api_key:

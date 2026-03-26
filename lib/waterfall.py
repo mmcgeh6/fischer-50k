@@ -479,16 +479,17 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
         if api_key:
             logger.info(f"Step 5: Generating system narratives for BBL {bbl}")
 
-            # Generate all 5 narratives
+            # Generate all 6 narratives
             narratives = generate_all_narratives(result)
 
             # Map narrative dict keys to DB column names
             narrative_map = {
+                "Building Envelope": "envelope_narrative",
                 "Ventilation": "ventilation_narrative",
-                "Controls": "controls_narrative",
                 "Heating": "heating_narrative",
                 "Cooling": "cooling_narrative",
                 "Domestic Hot Water": "dhw_narrative",
+                "Controls": "controls_narrative",
             }
 
             # Store narratives in result dict under both original and DB keys
@@ -627,7 +628,7 @@ def fetch_building_waterfall(bbl: str, save_to_db: bool = True) -> Dict[str, Any
     if save_to_db:
         # Prepare data for Building_Metrics (exclude ll87_raw JSONB - stays in ll87_raw table)
         # Also exclude narratives (already saved) and debug _raw keys
-        exclude_keys = {'ll87_raw', 'Ventilation', 'Controls', 'Heating', 'Cooling', 'Domestic Hot Water'}
+        exclude_keys = {'ll87_raw', 'Building Envelope', 'Ventilation', 'Heating', 'Cooling', 'Domestic Hot Water', 'Controls'}
         db_data = {k: v for k, v in result.items()
                    if k not in exclude_keys and not k.startswith('_')}
 
