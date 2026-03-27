@@ -801,8 +801,8 @@ def render_debug_sidebar(data: dict):
             st.text(f"  {label}: {f'{len(val)} chars' if val else 'None'}")
 
         st.markdown("#### LL87 Equipment Data Extracted for Prompts")
-        from lib.api_client import _extract_all_category_data
-        equipment = _extract_all_category_data(data.get('ll87_raw'))
+        from lib.api_client import _extract_all_sections
+        equipment = _extract_all_sections(data.get('ll87_raw'), data.get('ll87_period'))
         for section_name, section_data in equipment.items():
             st.markdown(f"**{section_name}:**")
             st.text(section_data)
