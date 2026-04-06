@@ -790,6 +790,7 @@ def render_debug_sidebar(data: dict):
 
         st.markdown("#### Existing Narratives")
         narrative_cols_dbg = {
+            'Building Envelope': 'envelope_narrative',
             'Ventilation': 'ventilation_narrative',
             'Controls': 'controls_narrative',
             'Heating': 'heating_narrative',
@@ -1117,6 +1118,7 @@ if submitted:
 
                     # Extract narratives from waterfall result
                     narrative_map = {
+                        'Building Envelope': 'envelope_narrative',
                         'Ventilation': 'ventilation_narrative',
                         'Controls': 'controls_narrative',
                         'Heating': 'heating_narrative',
@@ -1156,6 +1158,7 @@ if submitted:
 
                     # Extract narratives from cached data
                     narrative_map = {
+                        'Building Envelope': 'envelope_narrative',
                         'Ventilation': 'ventilation_narrative',
                         'Controls': 'controls_narrative',
                         'Heating': 'heating_narrative',
